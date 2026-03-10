@@ -1,0 +1,15 @@
+version: "3"
+
+services:
+
+  api:
+
+    build: ./backend
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - ./workspaces:/workspaces
+
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
