@@ -1,23 +1,41 @@
+import logging
+from typing import Any
+
+from app.models.task import Task
 from app.workspace.workspace_manager import WorkspaceManager
 from agent_runtime.agent_loop import AgentLoop
 
-class Orchestrator:
+logger = logging.getLogger(__name__)
 
-    def __init__(self):
-        self.tasks = {}
+
+class Orchestrator:
+    def __init__(self) -> None:
+        self.tasks: dict[str, Task] = {}
         self.workspace_manager = WorkspaceManager()
         self.agent_loop = AgentLoop()
 
-    def create_task(self, task):
-        workspace = self.workspace_manager.create_workspace(task.id)
+    def create_task(self, task: Task) -> Task:
+        try:
+            workspace = self.workspace_manager.create_workspace(task.id)
+        except Exception as e:
+            logger.exception("Failed to create workspace for task %s: %s", task.id, e)
+            task.status = "error"
+            self.tasks[task.id] = task
+            return task
         task.workspace = workspace
         task.status = "running"
         self.tasks[task.id] = task
+        logger.info("Created task %s", task.id, extra={"goal": task.goal[:80]})
         return task
 
-    def run_agent(self, task):
-        result = self.agent_loop.run(task)
-        task.status = result
+    def run_agent(self, task: Task) -> None:
+        try:
+            result = self.agent_loop.run(task)
+            task.status = result
+            logger.info("Agent finished task %s with status %s", task.id, result)
+        except Exception as e:
+            logger.exception("Agent run failed for task %s: %s", task.id, e)
+            task.status = "error"
 
-    def list_tasks(self):
+    def list_tasks(self) -> list[Task]:
         return list(self.tasks.values())

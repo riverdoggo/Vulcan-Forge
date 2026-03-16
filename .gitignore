@@ -1,0 +1,23 @@
+# Local env (use .env.example as template)
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project
+backend/workspaces/
+replays/
+*.log
