@@ -1,6 +1,7 @@
+import logging
 from typing import Any
 
-
+logger = logging.getLogger(__name__)
 class MemoryStore:
     def __init__(self) -> None:
         self.goal: str | None = None
@@ -24,8 +25,10 @@ class MemoryStore:
                     "stderr": (obs.get("stderr") or "")[:200],
                 }
                 truncated_obs.append(truncated)
-        return {
+        context = {
             "goal": self.goal,
             "history": self.history[-3:],
             "observations": truncated_obs,
         }
+        logger.info("MEMORY CONTEXT: %s", context)
+        return context

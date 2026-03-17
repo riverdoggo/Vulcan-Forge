@@ -15,8 +15,10 @@ class Executor:
     """Dispatches tool calls chosen by the LLM; returns typed ToolResult."""
 
     def execute(self, decision: AgentDecision, task: Any) -> dict[str, Any]:
-        tool_name = decision.tool.strip()
+        tool_name = decision.tool.strip() if decision.tool else None
         if not tool_name or tool_name not in TOOLS:
+            if decision.done:
+                return {"status": "success", "stdout": "task complete", "exit_code": 0}
             return ToolResult(status="error", stderr=f"Unknown tool: {tool_name}", exit_code=-1).to_dict()
         tool = TOOLS[tool_name]
         try:

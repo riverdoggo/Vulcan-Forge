@@ -90,6 +90,19 @@ class AgentLoop:
             steps.append(step_data)
             replay.save(task.id, {"goal": task.goal, "steps": steps})
 
+            if decision.tool == "run_tests" and result.get("exit_code") == 0:
+                commit_decision = AgentDecision(
+                    tool="git_commit",
+                    input="Fixed failing tests",
+                    content=None,
+                    done=False
+                )
+                commit_result = executor.execute(commit_decision, task)
+                steps.append({"step": step, "decision": commit_decision.model_dump(), "result": commit_result})
+                replay.save(task.id, {"goal": task.goal, "steps": steps, "status": "completed"})
+                logger.info("Hardcoded commit applied. Agent decided task is complete", extra={"task_id": task.id, "step": step})
+                return "completed"
+
             logger.info(
                 "Step %s | tool=%s | result_status=%s",
                 step,

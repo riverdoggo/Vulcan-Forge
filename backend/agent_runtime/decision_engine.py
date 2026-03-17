@@ -41,6 +41,7 @@ def query_llm_structured(prompt: str, retries: int = 3) -> AgentDecision:
     for attempt in range(retries):
         try:
             raw = query_llm(prompt)
+            logger.info("RAW LLM RESPONSE: %s", raw)
         except OllamaError as e:
             last_error = e
             logger.warning("LLM API error (attempt %s): %s", attempt + 1, e)
@@ -84,8 +85,10 @@ You MUST use one of these exact tool names:
 Rules:
 - Do NOT repeat an action you already took with the same input
 - For write_file you MUST provide the complete file content in the content field
-- Once run_tests shows ALL tests passing, you MUST call git_commit next
-- After git_commit succeeds, set done to true immediately
+- Once you successfully fix a bug and run_tests passes, YOU MUST CALL git_commit!
+- The input for git_commit should be a terse description of what you fixed
+- DO NOT set done=true until you have successfully called git_commit
+- AFTER git_commit succeeds, you MUST set done to true and stop using tools
 - Do NOT run tests again after they already passed
 - Do NOT list directory again unless you genuinely need new information
 
@@ -98,4 +101,5 @@ Return ONLY this JSON, no other text:
   "done": false
 }}
 """
+        logger.info("PROMPT SENT TO LLM:\n%s", prompt)
         return query_llm_structured(prompt)
