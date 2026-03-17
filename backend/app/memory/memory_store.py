@@ -14,8 +14,18 @@ class MemoryStore:
         self.observations.append(obs)
 
     def build_context(self) -> dict[str, Any]:
+        # Truncate history and observations to keep LLM prompt compact.
+        truncated_obs: list[dict[str, Any]] = []
+        for obs in self.observations[-3:]:
+            if isinstance(obs, dict):
+                truncated = {
+                    "status": obs.get("status"),
+                    "stdout": (obs.get("stdout") or "")[:500],
+                    "stderr": (obs.get("stderr") or "")[:200],
+                }
+                truncated_obs.append(truncated)
         return {
             "goal": self.goal,
-            "history": self.history[-5:],
-            "observations": self.observations[-5:],
+            "history": self.history[-3:],
+            "observations": truncated_obs,
         }

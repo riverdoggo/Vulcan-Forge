@@ -2,7 +2,7 @@
 
 An autonomous coding agent framework — similar in spirit to Devin or Cursor — built around a real execution loop, Docker sandboxing, and LLM-driven tool use.
 
-This is **v0.1**: the infrastructure is complete, but the agent can't touch code yet. That comes in Phase 2.
+This is **v0.2**: The agent now can read, modify code, and track changes using filesystem and git tools (Phase 2 complete).
 
 ---
 
@@ -143,19 +143,17 @@ Open `http://127.0.0.1:8000/docs` and submit a task.
 
 ---
 
-## Current limitations
+## Current Tools
 
-The agent can't read or modify code yet. These tools aren't implemented:
+The agent now has access to the following code modification and repository awareness tools (implemented in Phase 2):
 
-| Tool | Purpose |
-|------|---------|
-| `list_directory` | Browse the repo |
-| `read_file` | Read source files |
-| `write_file` | Make edits |
-| `git_diff` | Review changes |
-| `git_commit` | Commit work |
-
-Without them, the agent can run commands but has no idea what's in the repo.
+| Tool | Purpose | Status |
+|------|---------|--------|
+| `list_directory` | Browse the repo | ✅ Implemented |
+| `read_file` | Read source files | ✅ Implemented |
+| `write_file` | Make edits | ✅ Implemented |
+| `git_diff` | Review changes | ✅ Implemented |
+| `git_commit` | Commit work | ✅ Implemented |
 
 ---
 
@@ -163,7 +161,7 @@ Without them, the agent can run commands but has no idea what's in the repo.
 
 | Phase | Focus | Details |
 |-------|-------|---------|
-| **Phase 2** | Repo awareness | List files, read source, analyze failing tests, build repo context |
+| ✅ **Phase 2** | Repo awareness | List files, read source, analyze failing tests, build repo context |
 | **Phase 3** | Code modification | Edit files, generate patches, rerun tests |
 | **Phase 4** | Multi-agent | Coding agent + reviewer agent + human approval gate |
 

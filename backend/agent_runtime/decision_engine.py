@@ -43,7 +43,7 @@ def query_llm_structured(prompt: str, retries: int = 3) -> AgentDecision:
             raw = query_llm(prompt)
         except OllamaError as e:
             last_error = e
-            logger.warning("Ollama error (attempt %s): %s", attempt + 1, e)
+            logger.warning("LLM API error (attempt %s): %s", attempt + 1, e)
             continue
         obj = _extract_json_from_text(raw)
         if obj is None:
@@ -62,7 +62,7 @@ class DecisionEngine:
     def decide(self, memory: Any) -> AgentDecision:
         context = memory.build_context()
         prompt = f"""
-You are a coding agent.
+You are a coding agent working inside a Docker container at /workspace.
 
 Goal:
 {context["goal"]}
@@ -73,19 +73,27 @@ Recent actions:
 Recent observations:
 {context["observations"]}
 
-Available tools:
-{list(TOOLS.keys())}
+You MUST use one of these exact tool names:
+- list_directory
+- read_file
+- write_file
+- run_tests
+- git_diff
+- git_commit
 
-You MUST choose exactly one tool.
+Rules:
+- Do NOT repeat an action you already took with the same input
+- If you listed the directory already, move to run_tests or read_file next
+- For write_file you MUST provide the complete file content in the content field
+- Set done to true ONLY when run_tests shows all tests passing
 
-Return ONLY this JSON format:
+Return ONLY this JSON, no other text:
 
 {{
- "tool": "tool name from the available tools list",
- "input": "argument for the tool",
- "done": false
+  "tool": "list_directory",
+  "input": null,
+  "content": null,
+  "done": false
 }}
-
-No text before or after JSON.
 """
         return query_llm_structured(prompt)

@@ -1,6 +1,8 @@
 import logging
 
 from fastapi import APIRouter, BackgroundTasks
+from fastapi.responses import JSONResponse
+
 from app.models.task import Task
 from app.orchestrator.orchestrator import Orchestrator
 
@@ -21,3 +23,22 @@ def create_task(task: Task, background_tasks: BackgroundTasks) -> Task:
 @router.get("/tasks")
 def list_tasks() -> list[Task]:
     return orc.list_tasks()
+
+
+@router.get("/tasks/{task_id}/logs")
+def get_logs(task_id: str):
+    try:
+        return orc.get_logs(task_id)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "task_id": task_id},
+        )
+
+
+@router.get("/tasks/{task_id}")
+def get_task(task_id: str):
+    tasks = {t.id: t for t in orc.list_tasks()}
+    if task_id not in tasks:
+        return JSONResponse(status_code=404, content={"detail": "task not found"})
+    return tasks[task_id]

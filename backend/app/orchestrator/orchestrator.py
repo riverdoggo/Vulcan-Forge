@@ -1,6 +1,7 @@
 import logging
 from typing import Any
 
+from app.logging.replay_store import ReplayStore
 from app.models.task import Task
 from app.workspace.workspace_manager import WorkspaceManager
 from agent_runtime.agent_loop import AgentLoop
@@ -13,6 +14,7 @@ class Orchestrator:
         self.tasks: dict[str, Task] = {}
         self.workspace_manager = WorkspaceManager()
         self.agent_loop = AgentLoop()
+        self.replay_store = ReplayStore()
 
     def create_task(self, task: Task) -> Task:
         try:
@@ -32,10 +34,15 @@ class Orchestrator:
         try:
             result = self.agent_loop.run(task)
             task.status = result
-            logger.info("Agent finished task %s with status %s", task.id, result)
         except Exception as e:
-            logger.exception("Agent run failed for task %s: %s", task.id, e)
+            logger.exception("Agent loop crashed for task %s: %s", task.id, e)
             task.status = "error"
 
     def list_tasks(self) -> list[Task]:
         return list(self.tasks.values())
+
+    def get_logs(self, task_id: str) -> dict:
+        data = self.replay_store.get(task_id)
+        if not data:
+            return {"status": "no_logs_yet", "steps": []}
+        return data

@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -9,6 +10,13 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MEMORY_LIMIT = "512m"
 DEFAULT_CPU_LIMIT = "1.0"
+
+# Resolve project root as 4 levels up from this file:
+# backend/app/workspace/workspace_manager.py -> project root
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+# WORKSPACE_ROOT is a name like "workspaces"; keep env override but resolve to absolute base dir
+WORKSPACES_BASE = PROJECT_ROOT / WORKSPACE_ROOT
+TEST_REPO_DIR = WORKSPACES_BASE / "test_repo"
 
 
 def _sanitize_task_id(task_id: str) -> str:
@@ -24,10 +32,24 @@ def _container_name(task_id: str) -> str:
 class WorkspaceManager:
     def create_workspace(self, task_id: str) -> dict[str, str]:
         safe_id = _sanitize_task_id(task_id)
-        path = f"{WORKSPACE_ROOT}/{safe_id}"
-        os.makedirs(path, exist_ok=True)
+        # Path relative to project root (for returning/storing), and absolute on disk.
+        rel_path = f"{WORKSPACE_ROOT}/{safe_id}"
+        workspace_path = WORKSPACES_BASE / safe_id
+        workspace_path.mkdir(parents=True, exist_ok=True)
+
+        # Temporary: copy test_repo contents into workspace for Phase 2 testing.
+        try:
+            if TEST_REPO_DIR.exists() and TEST_REPO_DIR.is_dir():
+                for item in TEST_REPO_DIR.iterdir():
+                    if item.is_file():
+                        shutil.copy2(item, workspace_path / item.name)
+            else:
+                logger.warning("test_repo directory not found at %s; workspace will start empty", TEST_REPO_DIR)
+        except Exception as e:
+            logger.warning("Failed to copy test_repo into workspace %s: %s", workspace_path, e)
+
         container = _container_name(task_id)
-        abs_path = str(Path(os.getcwd()).resolve() / path)
+        abs_path = str(workspace_path.resolve())
         cmd = [
             "docker",
             "run",
@@ -51,8 +73,31 @@ class WorkspaceManager:
                     raise RuntimeError(f"docker run failed: {result.stderr}")
         except subprocess.TimeoutExpired:
             raise RuntimeError("docker run timed out after 30s")
-        logger.info("Created workspace container %s for task %s", container, task_id)
-        return {"path": path, "container": container}
+        logger.info("Created workspace container %s for task %s (workspace=%s)", container, task_id, abs_path)
+
+        # initialize git so diff and commit work
+        try:
+            init = subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "bash",
+                    "-c",
+                    "cd /workspace && git init && git add -A && git commit -m 'initial' --allow-empty",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if init.returncode == 0:
+                logger.info("Initialized git in workspace %s", container)
+            else:
+                logger.warning("Git init failed in workspace %s: %s", container, (init.stderr or "").strip())
+        except Exception as e:
+            logger.warning("Git init error in workspace %s: %s", container, e)
+
+        return {"path": rel_path, "container": container}
 
     def cleanup(self, container: str) -> None:
         """Stop and remove a workspace container. Idempotent."""

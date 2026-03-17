@@ -17,12 +17,22 @@ class Executor:
     def execute(self, decision: AgentDecision, task: Any) -> dict[str, Any]:
         tool_name = decision.tool.strip()
         if not tool_name or tool_name not in TOOLS:
-            raise ExecutorError(f"Unknown tool: {tool_name!r}")
+            return ToolResult(status="error", stderr=f"Unknown tool: {tool_name}", exit_code=-1).to_dict()
         tool = TOOLS[tool_name]
         try:
-            result = tool(task.workspace["container"], decision.input)
+            container = task.workspace["container"]
+            if tool_name == "write_file":
+                result = tool(
+                    container,
+                    {
+                        "path": decision.input,
+                        "content": decision.content,
+                    },
+                )
+            else:
+                result = tool(container, decision.input)
         except Exception as e:
-            raise ExecutorError(f"Tool {tool_name} failed: {e}") from e
+            return ToolResult(status="error", stderr=str(e), exit_code=-1).to_dict()
         if isinstance(result, ToolResult):
             return result.to_dict()
         if isinstance(result, dict) and "exit_code" in result:

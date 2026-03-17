@@ -9,6 +9,7 @@ class AgentDecision(BaseModel):
 
     tool: str = Field(..., description="Tool name from the available tools list")
     input: str | None = Field(default=None, description="Argument for the tool")
+    content: str | None = Field(default=None, description="Full file content (only for write_file)")
     done: bool = Field(default=False, description="Whether the agent is finished")
 
     @classmethod
@@ -17,5 +18,6 @@ class AgentDecision(BaseModel):
         return cls(
             tool=str(raw.get("tool", "")).strip(),
             input=raw.get("input") if raw.get("input") is None else str(raw["input"]),
+            content=raw.get("content") if raw.get("content") is None else str(raw["content"]),
             done=bool(raw.get("done", False)),
         )

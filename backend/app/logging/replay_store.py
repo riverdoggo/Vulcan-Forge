@@ -42,3 +42,16 @@ class ReplayStore:
             logger.exception("Failed to save replay %s: %s", task_id, e)
             return
         _enforce_replay_retention(REPLAY_DIR, REPLAY_MAX_FILES)
+
+    def get(self, task_id: str) -> dict | None:
+        if not _SAFE_ID.match(str(task_id)):
+            return None
+        path = os.path.join(REPLAY_DIR, f"{task_id}.json")
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            logger.warning("Failed to read replay %s: %s", task_id, e)
+            return None
