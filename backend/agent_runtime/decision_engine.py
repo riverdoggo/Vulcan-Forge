@@ -83,9 +83,11 @@ You MUST use one of these exact tool names:
 
 Rules:
 - Do NOT repeat an action you already took with the same input
-- If you listed the directory already, move to run_tests or read_file next
 - For write_file you MUST provide the complete file content in the content field
-- Set done to true ONLY when run_tests shows all tests passing
+- Once run_tests shows ALL tests passing, you MUST call git_commit next
+- After git_commit succeeds, set done to true immediately
+- Do NOT run tests again after they already passed
+- Do NOT list directory again unless you genuinely need new information
 
 Return ONLY this JSON, no other text:
 
