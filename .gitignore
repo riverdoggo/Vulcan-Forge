@@ -1,0 +1,23 @@
+# Local env
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project runtime - never commit these
+workspaces/
+replays/
+*.log
