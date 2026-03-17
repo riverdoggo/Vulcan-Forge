@@ -60,8 +60,31 @@ def query_llm_structured(prompt: str, retries: int = 3) -> AgentDecision:
 
 
 class DecisionEngine:
-    def decide(self, memory: Any) -> AgentDecision:
+    def decide(self, memory: Any, override_prompt: str | None = None) -> AgentDecision:
         context = memory.build_context()
+
+        if override_prompt:
+            prompt_modifier = override_prompt
+        else:
+            prompt_modifier = """
+You MUST use one of these exact tool names:
+- list_directory
+- read_file
+- write_file
+- run_tests
+- git_diff
+- git_commit
+
+Rules:
+- Do NOT repeat an action you already took with the same input
+- For write_file you MUST provide the complete file content in the content field
+- Once run_tests passes, call git_diff immediately
+- After git_diff succeeds, set done=true and stop
+- Do NOT call git_commit — committing is handled by the human approval system
+- Do NOT run tests again after they already passed
+- Do NOT list directory again unless you genuinely need new information
+"""
+
         prompt = f"""
 You are a coding agent working inside a Docker container at /workspace.
 
@@ -74,23 +97,7 @@ Recent actions:
 Recent observations:
 {context["observations"]}
 
-You MUST use one of these exact tool names:
-- list_directory
-- read_file
-- write_file
-- run_tests
-- git_diff
-- git_commit
-
-Rules:
-- Do NOT repeat an action you already took with the same input
-- For write_file you MUST provide the complete file content in the content field
-- Once you successfully fix a bug and run_tests passes, YOU MUST CALL git_commit!
-- The input for git_commit should be a terse description of what you fixed
-- DO NOT set done=true until you have successfully called git_commit
-- AFTER git_commit succeeds, you MUST set done to true and stop using tools
-- Do NOT run tests again after they already passed
-- Do NOT list directory again unless you genuinely need new information
+{prompt_modifier}
 
 Return ONLY this JSON, no other text:
 

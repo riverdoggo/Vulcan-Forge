@@ -1,6 +1,7 @@
 import logging
 
-from fastapi import APIRouter, BackgroundTasks
+from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 
 from app.models.task import Task
@@ -42,3 +43,32 @@ def get_task(task_id: str):
     if task_id not in tasks:
         return JSONResponse(status_code=404, content={"detail": "task not found"})
     return tasks[task_id]
+
+@router.get("/tasks/{task_id}/diff")
+def get_task_diff(task_id: str):
+    tasks = {t.id: t for t in orc.list_tasks()}
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task = tasks[task_id]
+    if task.status != "awaiting_approval":
+        raise HTTPException(status_code=400, detail="Task is not awaiting approval")
+    return {"diff": task.diff_output}
+
+@router.post("/tasks/{task_id}/approve")
+def approve_task(task_id: str):
+    try:
+        orc.approve_task(task_id)
+        return {"status": "success"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+class RejectRequest(BaseModel):
+    reason: str = ""
+
+@router.post("/tasks/{task_id}/reject")
+def reject_task(task_id: str, req: RejectRequest):
+    try:
+        orc.reject_task(task_id, req.reason)
+        return {"status": "success"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

@@ -20,4 +20,5 @@ env/
 # Project runtime - never commit these
 workspaces/
 replays/
+logs/
 *.log

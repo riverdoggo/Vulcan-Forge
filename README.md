@@ -157,6 +157,12 @@ The agent now has access to the following code modification and repository aware
 
 ---
 
+## Known Issues
+
+- **LLM Repetition Loop:** The agent may sometimes waste steps by looping between `read_file`, `list_directory`, and `run_tests` after already gathering the necessary context to implement a fix. This is due to the current model's tendency to ignore its own history when planning multi-step fixes, but the orchestrator's iteration limit prevents infinite loops.
+
+---
+
 ## Roadmap
 
 | Phase | Focus | Details |

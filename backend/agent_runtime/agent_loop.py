@@ -8,6 +8,7 @@ from app.models.agent_decision import AgentDecision
 from app.models.task import Task
 from agent_runtime.decision_engine import DecisionEngine, DecisionEngineError
 from agent_runtime.executor import Executor, ExecutorError
+from app.logging.log_writer import write_last_run_log
 
 logger = logging.getLogger(__name__)
 
@@ -40,26 +41,24 @@ class AgentLoop:
 
         done = False
         while not done and step < MAX_AGENT_STEPS:
-            # Detect repeated tool+input and inject an error observation instead of blindly looping.
-            if len(steps) >= 2:
-                last = steps[-1].get("decision", {})
-                second_last = steps[-2].get("decision", {})
-                if (
-                    isinstance(last, dict)
-                    and isinstance(second_last, dict)
-                    and last.get("tool") == second_last.get("tool")
-                    and last.get("input") == second_last.get("input")
-                ):
-                    memory.add_observation(
-                        {
-                            "status": "error",
-                            "stdout": "",
-                            "stderr": f"You already called {last.get('tool')} with the same input. You MUST choose a different tool now.",
-                        }
-                    )
-
+            # Detect repeated tool+input within the last 3 steps and force write_file
+            forced_write = False
+            if len(steps) >= 3:
+                recent_decisions = [s.get("decision", {}) for s in steps[-3:] if isinstance(s.get("decision"), dict)]
+                if len(recent_decisions) >= 2:
+                    last_d = recent_decisions[-1]
+                    # check if the last decision's tool/input appears earlier in the 3-step window
+                    for past_d in recent_decisions[:-1]:
+                        if last_d.get("tool") == past_d.get("tool") and last_d.get("input") == past_d.get("input"):
+                            forced_write = True
+                            break
+            
             try:
-                decision = decision_engine.decide(memory)
+                if forced_write:
+                    logger.warning("Agent is looping. Forcing write_file prompt.", extra={"task_id": task.id})
+                    decision = decision_engine.decide(memory, override_prompt="You are looping. You have already read the file and seen the bug. You must call write_file now with the fixed content. Do not call any other tool.")
+                else:
+                    decision = decision_engine.decide(memory)
             except DecisionEngineError as e:
                 logger.exception("Decision engine failed for task %s: %s", task.id, e)
                 # log the failure as a step so UI can see it
@@ -71,13 +70,17 @@ class AgentLoop:
                     }
                 )
                 replay.save(task.id, {"goal": task.goal, "steps": steps, "status": "error"})
+                task.status = "error"
+                write_last_run_log(task, steps)
                 return "error"
 
             if decision.done:
-                step_data = {"step": step, "decision": decision.model_dump(), "result": "agent_done"}
+                step_data = {"step": step, "decision": decision.model_dump(), "result": "success"}
                 steps.append(step_data)
                 replay.save(task.id, {"goal": task.goal, "steps": steps, "status": "completed"})
                 logger.info("Agent decided task is complete", extra={"task_id": task.id, "step": step})
+                task.status = "completed"
+                write_last_run_log(task, steps)
                 return "completed"
 
             try:
@@ -91,17 +94,26 @@ class AgentLoop:
             replay.save(task.id, {"goal": task.goal, "steps": steps})
 
             if decision.tool == "run_tests" and result.get("exit_code") == 0:
-                commit_decision = AgentDecision(
-                    tool="git_commit",
-                    input="Fixed failing tests",
+                diff_decision = AgentDecision(
+                    tool="git_diff",
+                    input=None,
                     content=None,
                     done=False
                 )
-                commit_result = executor.execute(commit_decision, task)
-                steps.append({"step": step, "decision": commit_decision.model_dump(), "result": commit_result})
-                replay.save(task.id, {"goal": task.goal, "steps": steps, "status": "completed"})
-                logger.info("Hardcoded commit applied. Agent decided task is complete", extra={"task_id": task.id, "step": step})
-                return "completed"
+                diff_result = executor.execute(diff_decision, task)
+                
+                # capture diff and update task
+                task.diff_output = diff_result.get("stdout", "")
+                task.status = "awaiting_approval"
+                
+                # record diff action and final paused state
+                step += 1
+                steps.append({"step": step, "decision": diff_decision.model_dump(), "result": diff_result})
+                replay.save(task.id, {"goal": task.goal, "steps": steps, "status": "awaiting_approval"})
+                
+                logger.info("Tests passed. Captured diff and pausing for approval. Agent loop stopping.", extra={"task_id": task.id, "step": step})
+                write_last_run_log(task, steps)
+                return "awaiting_approval"
 
             logger.info(
                 "Step %s | tool=%s | result_status=%s",
@@ -115,4 +127,6 @@ class AgentLoop:
             step += 1
 
         replay.save(task.id, {"goal": task.goal, "steps": steps, "status": "max_steps_reached"})
+        task.status = "max_steps_reached"
+        write_last_run_log(task, steps)
         return "max_steps_reached"

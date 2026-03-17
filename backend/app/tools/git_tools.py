@@ -7,7 +7,8 @@ from app.tools.docker_terminal import run_in_container_argv
 
 
 def git_diff(container: str, path: str | None = None) -> dict[str, Any]:
-    return run_in_container_argv(container, ["git", "diff"])
+    run_in_container_argv(container, ["git", "add", "-A"])
+    return run_in_container_argv(container, ["git", "diff", "--cached"])
 
 
 def git_commit(container: str, message: str | None) -> dict[str, Any]:

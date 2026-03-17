@@ -46,3 +46,41 @@ class Orchestrator:
         if not data:
             return {"status": "no_logs_yet", "steps": []}
         return data
+
+    def approve_task(self, task_id: str) -> None:
+        task = self.tasks.get(task_id)
+        if not task or task.status != "awaiting_approval":
+            raise ValueError("Task not found or not awaiting approval")
+
+        container = task.workspace["container"]
+        from app.tools.git_tools import git_commit # import here to avoid circular dep
+        result = git_commit(container, "Approved by human")
+        
+        task.status = "completed"
+        logs = self.get_logs(task_id)
+        if logs and "steps" in logs:
+            logs["status"] = "completed"
+            self.replay_store.save(task_id, logs)
+        
+        from app.logging.log_writer import write_last_run_log
+        write_last_run_log(task, logs.get("steps", []))
+
+    def reject_task(self, task_id: str, reason: str = "") -> None:
+        task = self.tasks.get(task_id)
+        if not task or task.status != "awaiting_approval":
+            raise ValueError("Task not found or not awaiting approval")
+
+        container = task.workspace["container"]
+        from app.tools.docker_terminal import run_in_container_argv
+        run_in_container_argv(container, ["git", "checkout", "--", "."])
+        run_in_container_argv(container, ["git", "clean", "-fd"])
+
+        task.status = "rejected"
+        task.rejection_reason = reason
+        logs = self.get_logs(task_id)
+        if logs and "steps" in logs:
+            logs["status"] = "rejected"
+            self.replay_store.save(task_id, logs)
+            
+        from app.logging.log_writer import write_last_run_log
+        write_last_run_log(task, logs.get("steps", []))
