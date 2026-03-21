@@ -13,3 +13,7 @@ class Task(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     diff_output: str = ""
     rejection_reason: str = ""
+    review_iterations: int = 0
+    reviewer_feedback: list[dict] = Field(default_factory=list)
+    reviewer_status: str = ""
+    escalation_reason: str = ""

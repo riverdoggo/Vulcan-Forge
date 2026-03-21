@@ -52,7 +52,13 @@ def get_task_diff(task_id: str):
     task = tasks[task_id]
     if task.status != "awaiting_approval":
         raise HTTPException(status_code=400, detail="Task is not awaiting approval")
-    return {"diff": task.diff_output}
+    return {
+        "diff": task.diff_output,
+        "reviewer_feedback": task.reviewer_feedback,
+        "reviewer_status": task.reviewer_status,
+        "escalation_reason": task.escalation_reason,
+        "review_iterations": task.review_iterations,
+    }
 
 @router.post("/tasks/{task_id}/approve")
 def approve_task(task_id: str):

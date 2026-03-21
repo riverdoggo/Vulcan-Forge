@@ -29,6 +29,8 @@ def _enforce_replay_retention(replay_dir: str, max_files: int) -> None:
 
 
 class ReplayStore:
+    """Persists task replay JSON under `replays/`. `data["steps"]` includes coder tools and `reviewer_agent` steps."""
+
     def save(self, task_id: str, data: dict) -> None:
         if not _SAFE_ID.match(str(task_id)):
             logger.warning("Skipping replay save for invalid task_id: %s", task_id[:50])
