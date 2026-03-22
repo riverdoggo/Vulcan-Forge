@@ -18,6 +18,29 @@ logger = logging.getLogger(__name__)
 MAX_REVIEW_CYCLES = 3
 
 
+def _should_force_run_tests_after_double_write(steps: list[dict[str, Any]]) -> bool:
+    """True if the last 3 steps contain two write_file calls on the same path with no run_tests between them."""
+    w = steps[-3:]
+    if len(w) < 2:
+        return False
+    n = len(w)
+    for i in range(n):
+        for j in range(i + 1, n):
+            di, dj = w[i].get("decision", {}), w[j].get("decision", {})
+            if not isinstance(di, dict) or not isinstance(dj, dict):
+                continue
+            if di.get("tool") != "write_file" or dj.get("tool") != "write_file":
+                continue
+            path = di.get("input")
+            if not path or path != dj.get("input"):
+                continue
+            between = w[i + 1 : j]
+            if any((b.get("decision") or {}).get("tool") == "run_tests" for b in between):
+                continue
+            return True
+    return False
+
+
 def _collect_staged_file_contents(container: str) -> dict[str, str]:
     """Read full contents of every path in the staged diff."""
     out = run_in_container_argv(container, ["git", "diff", "--cached", "--name-only"])
@@ -86,6 +109,7 @@ class AgentLoop:
             phase_steps = 0
             while phase_steps < MAX_AGENT_STEPS:
                 phase_steps += 1
+                force_run_tests = _should_force_run_tests_after_double_write(steps)
                 forced_write = False
                 if len(steps) >= 3:
                     recent_decisions = [s.get("decision", {}) for s in steps[-3:] if isinstance(s.get("decision"), dict)]
@@ -97,7 +121,13 @@ class AgentLoop:
                                 break
 
                 try:
-                    if forced_write:
+                    if force_run_tests:
+                        logger.warning(
+                            "Repeated write_file on same path without run_tests in between; forcing run_tests.",
+                            extra={"task_id": task.id},
+                        )
+                        decision = AgentDecision(tool="run_tests", input=None, content=None, done=False)
+                    elif forced_write:
                         logger.warning("Agent is looping. Forcing write_file prompt.", extra={"task_id": task.id})
                         decision = decision_engine.decide(
                             memory,

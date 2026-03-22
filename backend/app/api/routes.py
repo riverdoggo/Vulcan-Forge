@@ -50,8 +50,11 @@ def get_task_diff(task_id: str):
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
     task = tasks[task_id]
-    if task.status != "awaiting_approval":
-        raise HTTPException(status_code=400, detail="Task is not awaiting approval")
+    if task.status not in ("awaiting_approval", "completed", "rejected"):
+        raise HTTPException(
+            status_code=400,
+            detail="Diff is only available after a review gate or once the task has finished",
+        )
     return {
         "diff": task.diff_output,
         "reviewer_feedback": task.reviewer_feedback,

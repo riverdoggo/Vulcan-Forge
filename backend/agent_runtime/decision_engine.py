@@ -108,7 +108,8 @@ You MUST use one of these exact tool names:
 Rules:
 - Do NOT repeat an action you already took with the same input
 - For write_file you MUST provide the complete file content in the content field
-- After write_file, call run_tests when you need to verify your fix
+- After EVERY write_file call you MUST immediately call run_tests next — no exceptions
+- Never call write_file twice in a row on the same file
 - When run_tests passes, the runtime automatically runs git_diff and the reviewer — you do not call git_diff yourself
 - Always set done to false; the runtime ignores done=true and completion goes through automated review and human approval
 - Do NOT call git_commit — committing is handled by the human approval system

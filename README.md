@@ -2,7 +2,7 @@
 
 An autonomous coding agent framework — similar in spirit to Devin or Cursor — built around a real execution loop, Docker sandboxing, and LLM-driven tool use.
 
-This is **v0.4**: Full multi-agent pipeline with autonomous code review, human escalation gate, and Docker sandboxing. Phases 1–4 complete.
+This is **v0.5**: Full multi-agent pipeline with autonomous code review, human escalation gate, Docker sandboxing, and a React dashboard UI. Phases 1–5 complete.
 
 ---
 
@@ -148,6 +148,9 @@ ai-orchestrator/
 │       ├── tools/
 │       └── logging/
 ├── agent_runtime/
+├── frontend/          ← React UI (CRA / react-scripts)
+├── docs/
+│   └── Phase5-React-UI-Brief.md
 ├── sandbox/
 │   └── docker/
 └── workspaces/
@@ -180,6 +183,16 @@ Open `http://127.0.0.1:8000/docs` and submit a task.
 
 Set `GROQ_API_KEY` in your environment (or `.env` at the project root) for the LLM.
 
+**4. Start the React UI (optional)**
+
+```bash
+cd frontend
+npm install
+npm start
+```
+
+Opens `http://localhost:3000` and talks to the API at `http://localhost:8000` (CORS enabled). Override with `REACT_APP_API_BASE` if needed. Full UI brief: `docs/Phase5-React-UI-Brief.md`.
+
 ---
 
 ## Current Tools
@@ -211,6 +224,31 @@ Every run writes to `logs/last_run.log` at the project root, overwriting on each
 
 ---
 
+## UI Dashboard
+
+A React dashboard is included in `frontend/` for running and monitoring tasks without touching the API directly.
+
+**Start the frontend:**
+
+```bash
+cd frontend
+npm install
+npm start
+```
+
+Open `http://localhost:3000`. The backend must be running on port 8000.
+
+**What the UI does:**
+
+- Submit tasks from the sidebar input, results auto-select and open
+- Live log view — steps stream in as the agent runs, click any step to expand and see full output
+- Diff tab — syntax-highlighted git diff, available after task completes or reaches approval gate
+- Review tab — full reviewer feedback history with cycle counts
+- Approval banner — appears on escalated tasks with approve/reject controls inline
+- Summary card — rendered at the bottom of every completed log showing step count and reviewer outcome
+
+---
+
 ## Roadmap
 
 | Phase | Focus | Status |
@@ -219,7 +257,8 @@ Every run writes to `logs/last_run.log` at the project root, overwriting on each
 | Phase 2 | Repo awareness — read, list, git tools | ✅ Complete |
 | Phase 3 | Human approval gate, git_diff pause, rollback | ✅ Complete |
 | Phase 4 | Multi-agent reviewer loop, auto-commit, escalation | ✅ Complete |
-| Phase 5 | React UI — submit tasks, view logs, approve/reject from browser | 🔜 Next |
+| Phase 5 | React dashboard UI | ✅ Complete |
+| Phase 6 | Dynamic repo input — point agent at any repo via API | 🔜 Next |
 
 ---
 
