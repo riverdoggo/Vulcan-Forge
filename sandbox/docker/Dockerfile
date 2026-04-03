@@ -2,9 +2,11 @@ FROM python:3.11
 
 RUN apt-get update && apt-get install -y \
     git \
+    patch \
     nodejs \
     npm
 
+RUN pip install --upgrade pip setuptools wheel
 RUN pip install pytest
 
 # configure git identity for agent commits

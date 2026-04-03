@@ -14,17 +14,35 @@ Checklist (be explicit in your reasoning, but output only the JSON described bel
 
 You receive the full contents of every file touched in the staged diff, the git diff itself, and the test command output.
 
-You must respond with a single JSON object and nothing else — no markdown fences, no preamble, no trailing commentary. Use exactly these verdict strings:
+Return ONLY valid JSON in the schema below — no markdown fences, no preamble, no trailing commentary.
+
+Required schema (exact keys):
+{
+  "verdict": "approved",
+  "reason": "short explanation",
+  "confidence": 0.85
+}
+
+Verdict must be exactly one of these strings: "approved", "needs_changes", "escalate_to_human".
+
 - "approved" — the change is sound for merge pending human policy; you found no material issues.
 - "needs_changes" — you found concrete problems the coder should fix before a human sees this.
-- "escalate_to_human" — uncertainty is too high, risk is too high, or the situation requires human judgment (e.g. product/security/legal).
+- "escalate_to_human" — uncertainty is too high, risk is too high, or the situation requires human judgment.
 
-The "reason" field must briefly justify the verdict. The "suggestions" field must give actionable guidance for the coder when verdict is needs_changes; for approved or escalate_to_human it may be empty or a short note.
+The "reason" field must briefly justify the verdict.
 
-Required JSON shape:
+The "confidence" field must be a number between 0.0 and 1.0 (your confidence in the verdict).
+
+Optional keys (include when useful):
+- "suggestions": actionable guidance for the coder when verdict is needs_changes; otherwise may be empty.
+- "lesson": one plain-text line for durable memory when approved or escalate_to_human; empty for needs_changes.
+
+Example (needs_changes):
 {
-  "verdict": "approved | needs_changes | escalate_to_human",
-  "reason": "...",
-  "suggestions": "..."
+  "verdict": "needs_changes",
+  "reason": "The fix skips validation that the failing test exercised.",
+  "confidence": 0.72,
+  "suggestions": "Preserve the original guard clause before returning.",
+  "lesson": ""
 }
 """

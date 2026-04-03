@@ -1,8 +1,119 @@
+import difflib
+import logging
+import re
 from typing import Any
 
+from app.logging.log_writer import append_runtime_log
 from app.models.agent_decision import AgentDecision
 from app.models.tool_result import ToolResult
+from app.tools.docker_terminal import run_in_container_argv
+from app.tools.filesystem_tools import read_file as read_file_tool
 from app.tools.tool_registry import TOOLS
+
+logger = logging.getLogger(__name__)
+
+_PYTEST_SUMMARY_RE = re.compile(
+    r"(?P<passed>\d+)\s+passed|(?P<failed>\d+)\s+failed|(?P<errors>\d+)\s+error[s]?|(?P<skipped>\d+)\s+skipped",
+    re.IGNORECASE,
+)
+
+
+def _parse_pytest_counts(output: str) -> dict[str, int | None]:
+    counts: dict[str, int | None] = {"passed": None, "failed": None, "errors": None, "skipped": None}
+    if not output:
+        return counts
+    for m in _PYTEST_SUMMARY_RE.finditer(output):
+        gd = m.groupdict()
+        for k, v in gd.items():
+            if v is None:
+                continue
+            try:
+                counts[k] = int(v)
+            except ValueError:
+                continue
+    return counts
+
+
+def _looks_like_unified_diff(text: str) -> bool:
+    if not text or not text.strip():
+        return False
+    lines = text.splitlines()
+    return (
+        any(l.startswith("--- ") for l in lines)
+        and any(l.startswith("+++ ") for l in lines)
+        and any(l.startswith("@@") for l in lines)
+    )
+
+
+def _apply_patch_text_from_decision(decision: AgentDecision) -> str | None:
+    inp = decision.input if decision.input is None else str(decision.input).strip()
+    ct = decision.content if decision.content is None else str(decision.content).strip()
+    if _looks_like_unified_diff(ct):
+        return ct
+    if _looks_like_unified_diff(inp):
+        return inp
+    if ct and not inp:
+        return ct
+    if inp and not ct:
+        return inp
+    if ct and inp:
+        return ct if len(ct) >= len(inp) else inp
+    return None
+
+
+def _abs_workspace_path(path: str | None) -> str | None:
+    if path is None:
+        return None
+    p = str(path).strip()
+    if not p:
+        return None
+    return p if p.startswith("/") else f"/workspace/{p}"
+
+
+def _stat_workspace_file(container: str, abs_path: str) -> tuple[int, int] | None:
+    r = run_in_container_argv(container, ["stat", "-c", "%Y %s", abs_path])
+    if r.get("exit_code") != 0:
+        return None
+    parts = (r.get("stdout") or "").strip().split()
+    if len(parts) != 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+
+
+def _unblock_read_path(task: Any, abs_path: str) -> None:
+    lst = list(getattr(task, "read_blocked_paths", None) or [])
+    if abs_path in lst:
+        task.read_blocked_paths = [p for p in lst if p != abs_path]
+
+
+def _invalidate_file_cache(task: Any, abs_path: str) -> None:
+    cache = getattr(task, "file_read_cache", None)
+    if isinstance(cache, dict) and abs_path in cache:
+        del cache[abs_path]
+
+
+def _compute_line_diff_ratio(old: str, new: str) -> dict[str, Any]:
+    old_lines = old.splitlines()
+    new_lines = new.splitlines()
+    total = max(len(old_lines), 1)
+    sm = difflib.SequenceMatcher(a=old_lines, b=new_lines)
+    changed = 0
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            continue
+        changed += (i2 - i1) + (j2 - j1)
+    ratio = changed / total
+    return {"changed_lines": changed, "total_lines": total, "diff_ratio": ratio}
+
+
+def _detect_full_rewrite(old: str, new: str, diff_ratio: float) -> bool:
+    old_lines = old.splitlines()
+    line_count = len(old_lines)
+    threshold = 0.8 if line_count < 50 else 0.4
+    return diff_ratio > threshold
 
 
 class ExecutorError(Exception):
@@ -14,7 +125,7 @@ class ExecutorError(Exception):
 class Executor:
     """Dispatches tool calls chosen by the LLM; returns typed ToolResult."""
 
-    def execute(self, decision: AgentDecision, task: Any) -> dict[str, Any]:
+    def execute(self, decision: AgentDecision, task: Any, *, step: int = 0) -> dict[str, Any]:
         tool_name = decision.tool.strip() if decision.tool else None
         if not tool_name or tool_name not in TOOLS:
             if decision.done:
@@ -23,14 +134,135 @@ class Executor:
         tool = TOOLS[tool_name]
         try:
             container = task.workspace["container"]
+            if tool_name == "read_file":
+                path = _abs_workspace_path(decision.input)
+                if not path:
+                    return ToolResult(status="error", stderr="read_file requires a path", exit_code=-1).to_dict()
+                cache = getattr(task, "file_read_cache", None)
+                if not isinstance(cache, dict):
+                    task.file_read_cache = {}
+                    cache = task.file_read_cache
+                fp = _stat_workspace_file(container, path)
+                entry = cache.get(path)
+                if (
+                    entry
+                    and fp is not None
+                    and entry.get("mtime") == fp[0]
+                    and entry.get("size") == fp[1]
+                ):
+                    append_runtime_log(task, f"cache_hit: {path}")
+                    return {
+                        "status": "success",
+                        "stdout": entry.get("content", ""),
+                        "stderr": "",
+                        "exit_code": 0,
+                        "from_cache": True,
+                    }
+                result = read_file_tool(container, decision.input)
+                if int(result.get("exit_code", -1) or -1) == 0:
+                    fp2 = fp if fp is not None else _stat_workspace_file(container, path)
+                    if fp2 is not None:
+                        cache[path] = {
+                            "content": result.get("stdout") or "",
+                            "mtime": fp2[0],
+                            "size": fp2[1],
+                            "last_read_step": step,
+                        }
+                    else:
+                        cache[path] = {
+                            "content": result.get("stdout") or "",
+                            "mtime": -1,
+                            "size": -1,
+                            "last_read_step": step,
+                        }
+                return result
+
+            if tool_name == "apply_patch":
+                if getattr(task, "regression_baseline", None) is None:
+                    task.regression_baseline = getattr(task, "last_test_counts", None)
+                patch_text = _apply_patch_text_from_decision(decision)
+                result = tool(container, patch_text)
+                if not isinstance(result, dict):
+                    return ToolResult(status="error", stderr=str(result), exit_code=-1).to_dict()
+                if int(result.get("exit_code", -1) or -1) == 0:
+                    target = result.get("target")
+                    if target:
+                        abs_target = _abs_workspace_path(str(target))
+                        if abs_target:
+                            _invalidate_file_cache(task, abs_target)
+                            _unblock_read_path(task, abs_target)
+                        append_runtime_log(task, f"patch_applied: {target}")
+                        result = dict(result)
+                        result["patch_applied_target"] = target
+                    if hasattr(task, "touched_files") and target:
+                        abs_t = _abs_workspace_path(str(target))
+                        if abs_t and abs_t not in getattr(task, "touched_files", []):
+                            task.touched_files.append(abs_t)
+                return result
+
             if tool_name == "write_file":
-                result = tool(
-                    container,
-                    {
-                        "path": decision.input,
-                        "content": decision.content,
-                    },
+                path = _abs_workspace_path(decision.input)
+                if not path:
+                    return ToolResult(status="error", stderr="write_file requires a path", exit_code=-1).to_dict()
+
+                proposed = decision.content or ""
+                current_r = read_file_tool(container, path)
+                current = current_r.get("stdout", "") if isinstance(current_r, dict) else ""
+
+                stats = _compute_line_diff_ratio(current, proposed)
+                diff_ratio = float(stats["diff_ratio"])
+                logger.info(
+                    "diff size path=%s changed_lines=%s total_lines=%s diff_ratio=%.3f",
+                    path,
+                    stats["changed_lines"],
+                    stats["total_lines"],
+                    diff_ratio,
+                    extra={"task_id": getattr(task, "id", None)},
                 )
+
+                if _detect_full_rewrite(current, proposed, diff_ratio):
+                    logger.warning(
+                        "Full rewrite detected",
+                        extra={"task_id": getattr(task, "id", None), "path": path, "diff_ratio": diff_ratio},
+                    )
+                    threshold = 0.8 if len(current.splitlines()) < 50 else 0.4
+                    guidance = (
+                        "Write rejected: full rewrite detected.\n"
+                        "Your change modified too much of the file.\n"
+                        "Only edit the minimal lines necessary to fix the failing tests.\n"
+                        "Prefer apply_patch for small localized edits.\n"
+                        f"Diff ratio: {diff_ratio:.3f} (allowed <= {threshold:.3f} for this file size)."
+                    )
+                    return ToolResult(
+                        status="error",
+                        stderr="Full rewrite detected",
+                        stdout=guidance,
+                        exit_code=2,
+                        diff_ratio=diff_ratio,
+                        changed_lines=stats["changed_lines"],
+                        total_lines=stats["total_lines"],
+                        rejected_reason="full_rewrite_detected",
+                    ).to_dict()
+
+                if not getattr(task, "pre_write_files", None):
+                    task.pre_write_files = {}
+                task.pre_write_files[path] = current
+
+                if getattr(task, "regression_baseline", None) is None:
+                    task.regression_baseline = getattr(task, "last_test_counts", None)
+
+                if hasattr(task, "touched_files") and path not in getattr(task, "touched_files", []):
+                    task.touched_files.append(path)
+
+                result = tool(container, {"path": decision.input, "content": decision.content})
+                if isinstance(result, dict):
+                    result.setdefault("diff_ratio", diff_ratio)
+                    result.setdefault("changed_lines", stats["changed_lines"])
+                    result.setdefault("total_lines", stats["total_lines"])
+                if isinstance(result, dict) and int(result.get("exit_code", -1) or -1) == 0:
+                    _invalidate_file_cache(task, path)
+                    _unblock_read_path(task, path)
+                return result if isinstance(result, dict) else result
             else:
                 result = tool(container, decision.input)
         except Exception as e:
@@ -38,9 +270,20 @@ class Executor:
         if isinstance(result, ToolResult):
             return result.to_dict()
         if isinstance(result, dict) and "exit_code" in result:
-            return ToolResult.from_subprocess(
+            tr = ToolResult.from_subprocess(
                 returncode=result["exit_code"],
                 stdout=result.get("stdout", "") or "",
                 stderr=result.get("stderr", "") or "",
             ).to_dict()
+
+            if tool_name == "run_tests":
+                combined = (result.get("stdout") or "") + "\n" + (result.get("stderr") or "")
+                counts = _parse_pytest_counts(combined)
+                if hasattr(task, "last_test_counts"):
+                    task.last_test_counts = counts
+                tr["test_counts"] = counts
+                fs = result.get("failure_summary")
+                if fs:
+                    tr["failure_summary"] = fs
+            return tr
         return ToolResult(status="error", stderr=str(result), exit_code=-1).to_dict()

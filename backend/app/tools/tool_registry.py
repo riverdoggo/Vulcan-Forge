@@ -1,8 +1,9 @@
 from typing import Any, Callable
 
 from app.tools.docker_terminal import run_in_container
-from app.tools.filesystem_tools import read_file, write_file
+from app.tools.filesystem_tools import apply_patch, read_file, write_file
 from app.tools.git_tools import git_commit, git_diff
+from app.tools.run_command import run_command
 from app.tools.test_tools import run_tests
 
 
@@ -13,8 +14,10 @@ def list_directory(container: str, path: str | None = None) -> dict[str, Any]:
 
 # Map tool name -> callable(container, input) -> dict
 TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
+    "run_command": run_command,
     "run_tests": run_tests,
     "read_file": read_file,
+    "apply_patch": apply_patch,
     "write_file": write_file,
     "list_directory": list_directory,
     "git_diff": git_diff,

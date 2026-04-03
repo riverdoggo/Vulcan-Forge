@@ -1,0 +1,9 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+echo Starting backend...
+echo Starting frontend...
+echo Opening dashboard...
+python start.py
+echo.
+pause

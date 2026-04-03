@@ -5,9 +5,27 @@ from app.tools.docker_terminal import run_in_container_argv
 
 # Basic git operations inside sandbox container; message is escaped to prevent injection.
 
+# Unstage compiled / cache artifacts so they never appear in diffs or commits.
+_GIT_SANITIZE_STAGED = r"""
+git add -A
+git diff --cached --name-only -z | while IFS= read -r -d '' f; do
+  if [[ "$f" == *__pycache__* ]] || [[ "$f" == *.pyc ]] || [[ "$f" == *.pyo ]] || [[ "$f" == *.pyd ]] \
+     || [[ "$f" == .pytest_cache/* ]] || [[ "$f" == */.pytest_cache/* ]]; then
+    git reset HEAD -- "$f" 2>/dev/null || true
+  fi
+done
+exit 0
+"""
+
+
+def _stage_workspace_sanitized(container: str) -> dict[str, Any]:
+    return run_in_container_argv(container, ["bash", "-lc", _GIT_SANITIZE_STAGED])
+
 
 def git_diff(container: str, path: str | None = None) -> dict[str, Any]:
-    run_in_container_argv(container, ["git", "add", "-A"])
+    stage = _stage_workspace_sanitized(container)
+    if stage.get("exit_code") != 0:
+        return stage
     return run_in_container_argv(container, ["git", "diff", "--cached"])
 
 
@@ -15,5 +33,7 @@ def git_commit(container: str, message: str | None) -> dict[str, Any]:
     if not message or not str(message).strip():
         return {"status": "error", "stderr": "commit message required", "exit_code": -1, "stdout": ""}
     safe_msg = shlex.quote(str(message).strip())
-    run_in_container_argv(container, ["git", "add", "."])
+    stage = _stage_workspace_sanitized(container)
+    if stage.get("exit_code") != 0:
+        return stage
     return run_in_container_argv(container, ["sh", "-c", f"git commit -m {safe_msg}"])
