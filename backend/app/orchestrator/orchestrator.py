@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+from app.config.settings import AGENT_TASK_TIMEOUT
 from app.database import save_task
 from app.logging.replay_store import ReplayStore
 from app.models.task import Task
@@ -31,6 +32,9 @@ def _workspace_failure_user_message(exc: BaseException) -> str:
     return msg[:4000]
 
 
+_TERMINAL_CLEANUP_STATUSES = frozenset({"completed", "error", "max_steps_reached", "killed"})
+
+
 class Orchestrator:
     def __init__(self) -> None:
         self.tasks: dict[str, Task] = {}
@@ -55,7 +59,7 @@ class Orchestrator:
         self.tasks[task.id] = task
         self.session_order.insert(0, task.id)
         save_task(task)
-        logger.info("Created task %s", task.id, extra={"goal": task.goal[:80]})
+        logger.info("Created task %s goal=%s", task.id, (task.goal or "")[:80])
         return task
 
     async def kill_task_async(self, task_id: str) -> dict[str, str]:
@@ -94,12 +98,37 @@ class Orchestrator:
         return {"status": "ok", "message": "Agent stopped; in-flight LLM requests cancelled."}
 
     async def run_agent_async(self, task: Task) -> None:
+        timed_out = False
         try:
-            result = await self.agent_loop.run_async(task)
-            if getattr(task, "kill_requested", False):
-                task.status = "killed"
+            try:
+                result = await asyncio.wait_for(
+                    self.agent_loop.run_async(task),
+                    timeout=float(AGENT_TASK_TIMEOUT),
+                )
+            except asyncio.TimeoutError:
+                timed_out = True
+                logger.error(
+                    "[timeout] Task %s exceeded %ss limit — marking as error",
+                    task.id,
+                    AGENT_TASK_TIMEOUT,
+                    extra={"task_id": task.id},
+                )
+                task.status = "error"
+                task.error_message = (
+                    f"Task timed out after {AGENT_TASK_TIMEOUT} seconds. "
+                    "This usually means the LLM call stalled or Docker exec hung."
+                )
+                save_task(task)
+                try:
+                    await asyncio.sleep(2)
+                    terminate_workspace_container(task.id, remove_workspace_dir=True)
+                except Exception as e:
+                    logger.warning("[timeout] Cleanup failed for %s: %s", task.id, e)
             else:
-                task.status = result
+                if getattr(task, "kill_requested", False):
+                    task.status = "killed"
+                else:
+                    task.status = result
         except asyncio.CancelledError:
             logger.info("Agent asyncio task cancelled for task %s", task.id)
             task.kill_requested = True
@@ -126,12 +155,14 @@ class Orchestrator:
             task.agent_runtime_task = None
             save_task(task)
             st = task.status
-            if task.workspace and st in ("completed", "error", "max_steps_reached", "killed"):
+            if (
+                task.workspace
+                and st in _TERMINAL_CLEANUP_STATUSES
+                and not timed_out
+            ):
                 try:
-                    terminate_workspace_container(
-                        task.id,
-                        remove_workspace_dir=(st == "killed"),
-                    )
+                    await asyncio.sleep(2)
+                    terminate_workspace_container(task.id, remove_workspace_dir=True)
                 except Exception as e:
                     logger.warning("Post-run workspace cleanup failed for %s: %s", task.id, e)
 
@@ -170,6 +201,11 @@ class Orchestrator:
 
         write_last_run_log(task, logs.get("steps", []))
 
+        try:
+            terminate_workspace_container(task_id, remove_workspace_dir=True)
+        except Exception as e:
+            logger.warning("Post-approve workspace cleanup failed for %s: %s", task_id, e)
+
     def reject_task(self, task_id: str, reason: str = "") -> None:
         task = self.tasks.get(task_id)
         if not task or task.status != "awaiting_approval":
@@ -192,3 +228,8 @@ class Orchestrator:
         from app.logging.log_writer import write_last_run_log
 
         write_last_run_log(task, logs.get("steps", []))
+
+        try:
+            terminate_workspace_container(task_id, remove_workspace_dir=True)
+        except Exception as e:
+            logger.warning("Post-reject workspace cleanup failed for %s: %s", task_id, e)

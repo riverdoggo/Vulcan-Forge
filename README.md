@@ -1,49 +1,34 @@
-# AI Coding Orchestrator
+# 🔥 Vulcan Forge
 
-An autonomous coding agent framework — similar in spirit to Devin or Cursor — built around a real execution loop, Docker sandboxing, and LLM-driven tool use.
+**Autonomous AI coding agent** — submit a task, the agent reads your codebase,
+writes targeted fixes, runs tests, gets reviewed by a second AI, and commits.
+All inside a Docker sandbox. Bring your own API key or use the server default.
 
-This is **v0.5**: Full multi-agent pipeline with autonomous code review, human escalation gate, Docker sandboxing, and a React dashboard UI. Phases 1–5 complete.
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)
+![Vite](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Sandboxed-2496ED?logo=docker&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
----
+## Demo
 
-## Quick Start (one-click launcher)
+> 9 steps · 4 bugs fixed · 23/23 tests passing · reviewer approved at 0.95 confidence · auto-committed
 
-From the **repository root**, you can start the FastAPI backend and React dashboard together (and open the UI in your browser):
-
-| OS | Command |
-|----|---------|
-| **Windows** | Double-click `start.bat`, or run `start.bat` / `python start.py` from the root folder |
-| **Linux / macOS** | `chmod +x start.sh` once, then `./start.sh` or `python3 start.py` |
-
-Requirements: Python 3 with backend dependencies installed (`pip install -r backend/requirements.txt`), Node.js/npm for `frontend`, and Docker for sandboxes. Closing the launcher console (or `Ctrl+C`) stops both the backend and frontend child processes.
-
-Optional: build a Windows executable with [PyInstaller](https://pyinstaller.org/), for example:
-
-```bash
-pip install pyinstaller
-pyinstaller --onefile --name start start.py
-```
-
-Use the generated `dist/start.exe` like `start.bat` (run from the repo root so `backend/` and `frontend/` resolve correctly).
-
-### Kill switch (dashboard)
-
-While a task is **running**, open it in the UI and use **Kill task** to stop that agent only. This calls `POST /tasks/{task_id}/kill`, stops the agent loop on the next step boundary, tears down that task’s Docker container (`agent_ws_<sanitized_id>`) and workspace directory, and sets status to `killed`. Telemetry logs `kill_switch_activated: user_requested`. Other tasks are unaffected; repeat calls are safe.
+[Add demo GIF or video here]
 
 ---
 
-## What it does
+## How it works
 
-You submit a task via API. The agent takes it from there:
-
-1. Receives the task goal
-2. Asks an LLM what to do next
-3. Executes a tool inside a Docker sandbox
-4. Observes the result
-5. Updates its memory
-6. Repeats until done (or hits the iteration limit)
-
-It's the same basic loop most serious agent systems use.
+1. Submit a task goal and optional GitHub repo URL via dashboard or API
+2. Agent lists the workspace and runs the test suite to find failures
+3. LLM reads the failing code and writes a targeted fix
+4. Tests run automatically after every successful write — no manual trigger
+5. A second **Reviewer Agent** reads the diff, approves, requests changes, or escalates
+6. On approval → auto-commits. On escalation → human approval gate with full diff view
+7. All execution inside a **Docker sandbox** (network-isolated, memory + CPU limited)
+8. Full trace, diff, and review history in the Vulcan Forge dashboard
 
 ---
 
@@ -74,135 +59,113 @@ flowchart TD
 
 ## Features
 
-### Task API
-
-Submit tasks over HTTP:
-
-```http
-POST /tasks
-{
-  "goal": "run tests"
-}
-```
-
-Agent execution runs in a background task so the API stays responsive.
-
-Optional body fields (e.g. `repo_url`) are supported where the API accepts them; task state and transcripts are persisted in **SQLite** (`orchestrator.db` at the project root by default).
-
-### Docker Sandbox
-
-Each task gets its own container named `agent_ws_<sanitized_task_id>` (see `workspace_manager`), keeping execution isolated and reproducible. Commands run via `docker exec -i` (binary-safe stdout capture; important on Windows Docker Desktop).
-
-### Agent Loop (Observe → Think → Act)
-
-The core loop lives in `agent_runtime/agent_loop.py`. Each iteration is explicit:
-
-1. **Observe** — Build context from the goal, recent tool decisions (including `reasoning`), and tool observations (stdout, structured test failure summary when present).
-2. **Think** — The LLM returns a single JSON object: short `reasoning` (for logs/debug only) plus the chosen `tool`, `input`, optional `content` (for `write_file` / `apply_patch`), and `done`.
-3. **Act** — The executor runs the tool in the sandbox and records the result; memory is updated for the next cycle.
-
-```mermaid
-flowchart LR
-    O[Observe context] --> T[Think JSON decision]
-    T --> A[Act execute tool]
-    A --> O
-```
-
-### LLM Decision Engine
-
-Uses Groq API (llama-3.3-70b-versatile) for fast LLM decisions at 1–2 second response times.
-
-Each step, the model must return **valid JSON only** with required keys **`reasoning`**, **`tool`**, **`input`**, and **`done`** (the validator insists all four are present). Include **`content`** when using `write_file` (full file text) or `apply_patch` (unified diff); it may be omitted or `null` for other tools. The `reasoning` field is for logging only.
-
-```json
-{
-  "reasoning": "Run tests to see failures before editing",
-  "tool": "run_tests",
-  "input": "",
-  "content": null,
-  "done": false
-}
-```
-
-**Validation** — Before execution, the runtime checks JSON parse, presence of those keys, non-empty `reasoning`, and that `tool` is registered (when `done` is false).
-
-**Retries** — If parsing or validation fails, the engine retries up to **2** times (3 LLM calls total), appending a correction prompt that repeats the required JSON shape. Raw responses are logged when parsing fails.
-
-**Invalid decisions** — If all retries fail, the step is recorded as an error (invalid decision) in the replay, the task **stays running**, and the next cycle can observe the failure—no crash.
-
-**Loop detection** — If the same `tool` and `input` run twice **consecutively**, the next Think step is forced with an override prompt. If the same `read_file(path)` appears **3 times within the last 5 steps**, that path is **blocked** from further `read_file` calls until it is modified with `apply_patch` or `write_file`, or the agent reads a different path (`loop_guard_triggered: repeated_file_read` in logs).
-
-**Patch-first editing** — The coder is instructed to prefer **`apply_patch`** (unified diff) for small edits and **`write_file`** when the full file must be replaced.
-
-**Test failures** — When pytest fails, `run_tests` attaches a short structured **failure summary** (failing test names and expected vs. actual when parseable from output). That summary is injected into memory so the next Observe step surfaces it before raw pytest text.
-
-**Read behavior** — `read_file` returns full file contents (via host bind-mount or base64 in-container). Per-task **file read caching** avoids re-reading unchanged files: the executor stores content keyed by path with an `(mtime, size)` fingerprint from `stat`; cache entries are dropped after `write_file` / `apply_patch` on that path or on regression revert.
-
-**Step budget warning** — When fewer than about **5** steps remain in the current coder phase (`MAX_AGENT_STEPS`), a warning observation is injected so the model prioritizes a concrete fix over analysis.
-
-**Full rewrite protection** — `write_file` rejects oversized rewrites and returns actionable feedback (including `diff_ratio`) telling the agent to make a smaller localized change (preferably patch-based). Limits are size-aware: up to 40% change for normal files, up to 80% for files under 50 lines.
-
-### Tool System
-
-Tools are registered in a central registry and called dynamically based on LLM decisions. The coder agent uses filesystem, test, and git diff tools; it does **not** call `git_commit` directly — commits happen after reviewer approval (auto) or human approval.
-
-### Reviewer Agent
-
-After tests pass, a second LLM reviews the staged diff, full contents of touched files, and test output. It must return **only valid JSON** with at least:
-
-- `verdict` — `approved` | `needs_changes` | `escalate_to_human`
-- `reason` — short justification
-- `confidence` — number from **0.0** to **1.0**
-
-Optional: `suggestions` (for `needs_changes`), `lesson` (for memory on approve/escalate).
-
-**Validation** — The runtime parses JSON and validates fields. On failure it **retries once** with a correction prompt (`reviewer_retry: invalid_json` in telemetry). If both attempts fail, it uses a deterministic fallback: `escalate_to_human` with reason `reviewer returned invalid output` and `confidence: 0`.
-
-**Outcomes**
-
-- `approved` — auto-commits (staged files only; see git hygiene below) and marks task completed
-- `needs_changes` — feedback returns to the coder; review iteration count increases
-- `escalate_to_human` — task moves to `awaiting_approval`
-
-If the reviewer returns `needs_changes` **3** times without resolution, the task escalates to the human gate with full reviewer history.
-
-### Human Approval Gate
-
-Tasks that escalate reach `awaiting_approval` status. Three endpoints handle resolution:
-
-- `GET /tasks/{id}/diff` — returns the diff, reviewer feedback history, and escalation reason
-- `POST /tasks/{id}/approve` — triggers git commit
-- `POST /tasks/{id}/reject` — runs `git checkout -- .` to roll back all changes
-
-### Memory
-
-The agent tracks its goal, decision history, and observations. All of it gets injected into each LLM prompt so the model has context for what it's already tried.
-
-### Git hygiene (no `__pycache__` / `.pyc` in diffs or commits)
-
-The repo root `.gitignore` includes Python bytecode and `.pytest_cache/`. Inside the sandbox, **`git_diff`** and **`git_commit`** run a staging step that **unstages** paths matching `__pycache__`, `*.pyc`, `*.pyo`, `*.pyd`, and `.pytest_cache` before producing diffs or commits, so compiled artifacts do not pollute review or history.
-
-### Telemetry in `logs/last_run.log`
-
-`write_last_run_log` writes a **runtime telemetry** section when present, including lines such as:
-
-- `cache_hit: /workspace/...`
-- `reviewer_retry: invalid_json` / `reviewer_fallback: invalid_output`
-- `patch_applied: <path>`
-- `loop_guard_triggered: repeated_file_read`
-- `kill_switch_activated: user_requested`
-
-Per-step records can also show `cache_hit`, `patch_applied`, and `loop_guard` fields when applicable.
+| Feature | Detail |
+|---------|--------|
+| **Multi-agent pipeline** | Coder LLM + independent Reviewer LLM with structured JSON verdicts |
+| **Docker sandbox** | `--network none`, `--memory 512m`, `--cpus 1.0` per task |
+| **Human approval gate** | Escalated tasks pause for human review — approve to commit, reject to rollback |
+| **Regression guard** | Edits that worsen test results auto-revert via git |
+| **Token compression** | Caveman compression on reasoning, observation condensing, structured test output |
+| **Loop detection** | Blocks repeated reads, idle list loops, no-op writes, full rewrites |
+| **Live dashboard** | React + Vite UI with TRACE/DIFF/REVIEW tabs, live token counter, slash commands |
+| **Custom providers** | Bring your own API key — Groq, OpenAI, OpenRouter, DeepSeek, any OpenAI-compatible endpoint |
+| **OpenRouter fallback** | Auto-switches to OpenRouter when Groq daily limit hits |
+| **SSE streaming** | Real-time step updates via Server-Sent Events, polling fallback |
+| **API auth + rate limiting** | Optional `X-API-Key` header, 10 submissions/minute per IP |
+| **Input sanitization** | Goal and repo URL sanitized before LLM or git use |
+| **Structured logging** | JSON logs with task_id, daily rotation, 30-day retention |
+| **SQLite persistence** | Tasks survive server restarts, history loads on startup |
+| **Task timeout** | 10-minute hard timeout per task — hung LLM calls don't block forever |
+| **Workspace cleanup** | Docker containers and directories auto-removed after task completion |
 
 ---
 
-## Agent Safety Mechanisms
+## Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Backend | FastAPI 0.111, Python 3.11, Pydantic v2 |
+| LLM | Groq (`llama-3.3-70b-versatile`) + OpenRouter fallback |
+| Sandbox | Docker (`--network none`, `--memory 512m`, `--cpus 1.0`) |
+| Frontend | React 18, Vite 5, Geist Mono, DM Serif Display |
+| Persistence | SQLite |
+| Deployment | Azure VM (B2s), Docker Compose, Nginx |
+| Agent tools | `list_directory` `read_file` `write_file` `run_tests` `git_diff` `git_commit` `run_command` |
+
+---
+
+## Quick Start
+
+**Requirements:** Python 3.11+, Node.js 18+, Docker
+
+**1. Clone and install**
+```bash
+git clone https://github.com/riverdoggo/vulcan-forge
+cd vulcan-forge
+pip install -r backend/requirements.txt
+cd frontend && npm install && cd ..
+```
+
+**2. Configure environment**
+```bash
+cp backend/.env.example backend/.env
+# Edit backend/.env — add your GROQ_API_KEY at minimum
+```
+
+**3. Build sandbox image**
+```bash
+docker build -t agent-sandbox sandbox/docker
+```
+
+**4. Start everything**
+```bash
+# One command — starts backend + frontend
+./start.sh        # Linux/macOS
+start.bat         # Windows
+
+# Or with Docker Compose (production)
+docker compose up --build
+```
+
+Dashboard: `http://localhost:3000` · API docs: `http://localhost:8000/docs`
+
+---
+
+## API
+
+```http
+POST /tasks
+Content-Type: application/json
+X-API-Key: your_key          (if VULCAN_API_KEY is set)
+X-LLM-Key: sk-...            (optional — use your own LLM key)
+X-LLM-Model: gpt-4o          (optional — any model name)
+X-LLM-Base-URL: https://...  (optional — any OpenAI-compatible endpoint)
+
+{ "goal": "fix failing tests", "repo_url": "https://github.com/user/repo" }
+```
+
+```http
+GET  /tasks              — list all tasks
+GET  /tasks/{id}/logs    — step-by-step trace
+GET  /tasks/{id}/diff    — git diff + reviewer history
+GET  /tasks/{id}/stream  — SSE stream of live steps
+POST /tasks/{id}/approve — approve and commit
+POST /tasks/{id}/reject  — rollback changes
+POST /tasks/{id}/kill    — terminate running task
+GET  /health             — health check
+```
+
+---
+
+## Safety & Reliability
 
 | Mechanism | Purpose |
 |-----------|---------|
-| **Rewrite protection** | `write_file` compares proposed content to current file; excessive line churn (`diff_ratio`) is rejected with guidance to use smaller edits / `apply_patch`. |
-| **Loop guards** | Consecutive duplicate tool+input is blocked with a forced re-decision. Repeated `read_file` on one path (3× in 5 steps) blocks further reads of that path until it is edited or another file is read. |
+| **Rewrite protection** | `write_file` compares proposed content to current file; excessive `diff_ratio` vs a **size-based** max is rejected; identical content is rejected as a no-op. |
+| **Loop guards** | Consecutive duplicate tool+input is blocked with a forced re-decision. Repeated `read_file` on one path (3× in 5 steps) blocks further reads; redundant second read of a cached path is rejected; consecutive same-path reads or list-dir stalls get an override with test context. |
 | **File caching** | Reduces tokens by serving cached `read_file` results when `stat` shows the file unchanged; invalidated on writes, patches, and regression revert. |
+| **Forced run_tests** | After a successful `write_file` / `apply_patch`, the next step runs `run_tests` without calling the LLM. |
+| **Docker I/O** | `docker exec` uses `communicate()` with `bufsize=-1` and `-i` for full binary stdout capture. |
 | **Reviewer validation** | Strict JSON schema + confidence; retry once, then safe fallback to human escalation. |
 | **Kill switch** | User can stop a running task from the UI; the loop exits cleanly, logs the kill, and removes the sandbox. |
 | **Step budget warning** | Near `MAX_AGENT_STEPS`, the model sees an explicit warning to prioritize a concrete code change. |
@@ -210,85 +173,7 @@ Per-step records can also show `cache_hit`, `patch_applied`, and `loop_guard` fi
 
 ---
 
-## Example output
-
-```
-Step 0 | Decision: reasoning=… | tool: run_tests
-Result: 1 passed
-
-Step 1 | Decision: reasoning=… | tool: read_file
-```
-
----
-
-## Repo structure
-
-```
-ai-orchestrator/
-├── backend/
-│   └── app/
-│       ├── api/
-│       ├── agents/
-│       ├── config/
-│       ├── models/
-│       ├── orchestrator/
-│       ├── workspace/
-│       ├── memory/
-│       ├── llm/
-│       ├── tools/
-│       └── logging/
-├── agent_runtime/
-├── frontend/          ← React UI (CRA / react-scripts)
-├── docs/
-│   └── Phase5-React-UI-Brief.md
-├── sandbox/
-│   └── docker/
-├── start.py / start.bat / start.sh   ← one-click launcher
-├── MEMORY.md                         ← optional agent memory (lessons)
-├── orchestrator.db                   ← SQLite task store (local)
-└── workspaces/                       ← per-task sandboxes (gitignored)
-```
-
----
-
-## Running it
-
-**1. Install dependencies**
-
-```bash
-pip install -r backend/requirements.txt
-```
-
-**2. Build the sandbox image**
-
-```bash
-docker build -t agent-sandbox sandbox/docker
-```
-
-**3. Start the API**
-
-```bash
-cd backend
-uvicorn app.main:app --reload
-```
-
-Open `http://127.0.0.1:8000/docs` and submit a task.
-
-Set `GROQ_API_KEY` in your environment (or `.env` at the project root) for the LLM. See **`.env.example`** for optional variables (`GROQ_MODEL`, `MAX_AGENT_STEPS`, `SANDBOX_IMAGE`, `WORKSPACE_ROOT`, timeouts, etc.).
-
-**4. Start the React UI (optional)**
-
-```bash
-cd frontend
-npm install
-npm start
-```
-
-Opens `http://localhost:3000` and talks to the API at `http://localhost:8000` (CORS enabled). Override with `REACT_APP_API_BASE` if needed. Full UI brief: `docs/Phase5-React-UI-Brief.md`.
-
----
-
-## Current Tools
+## Tools
 
 | Tool | Purpose | Status |
 |------|---------|--------|
@@ -302,47 +187,14 @@ Opens `http://localhost:3000` and talks to the API at `http://localhost:8000` (C
 | `git_commit` | Used by the runtime after reviewer/human approval (not chosen by the coder LLM) | ✅ |
 | `reviewer_agent` | Automated review step after green tests (invoked by the runtime, not the coder tool registry) | ✅ |
 
-The coder LLM does not invoke `git_commit` directly; the runtime runs it after reviewer approval or human approval.
-
-Minimal edits are preferred because autonomous agents are more reliable when they operate on small, targeted changes. Smaller diffs reduce hallucinated deletions, lower regression risk, and make reviewer validation more deterministic.
-
 ---
 
-## Known Issues
+## Current Limitations
 
-- **LLM repetition:** The agent may still re-read or re-list before acting. Mitigations: consecutive duplicate tool+input loop breaker, per-path `read_file` blocking after 3 reads in 5 steps, and file read caching to cut token cost on legitimate re-reads.
-- **Reviewer over-aggression:** The reviewer prompt is scoped to the failing tests. On large or ambiguous diffs it may still request changes beyond the original bug.
-
----
-
-## Logging
-
-Every run writes to `logs/last_run.log` at the project root, overwriting on each run. The log contains every agent step, tool result, reviewer verdict with iteration count, and final status. For escalated tasks it includes the full reviewer feedback history so the human has complete context before approving or rejecting.
-
----
-
-## UI Dashboard
-
-A React dashboard is included in `frontend/` for running and monitoring tasks without touching the API directly.
-
-**Start the frontend:**
-
-```bash
-cd frontend
-npm install
-npm start
-```
-
-Open `http://localhost:3000`. The backend must be running on port 8000.
-
-**What the UI does:**
-
-- Submit tasks from the sidebar input, results auto-select and open
-- Live log view — steps stream in as the agent runs, click any step to expand and see full output
-- Diff tab — syntax-highlighted git diff, available after task completes or reaches approval gate
-- Review tab — full reviewer feedback history with cycle counts
-- Approval banner — appears on escalated tasks with approve/reject controls inline
-- Summary card — rendered at the bottom of every completed log showing step count and reviewer outcome
+- **Single-file focus** — multi-file changes across a repo are not yet supported
+- **Sandboxed dependencies** — `pip install` inside the container fails (`--network none`); packages must be pre-installed in the sandbox image
+- **Groq rate limits** — free tier caps at 100k tokens/day; complex runs use 5-8k tokens. OpenRouter fallback activates automatically
+- **File size** — diff truncation can occur on files above ~8KB (cap is configurable)
 
 ---
 
@@ -354,11 +206,28 @@ Open `http://localhost:3000`. The backend must be running on port 8000.
 | Phase 2 | Repo awareness — read, list, git tools | ✅ Complete |
 | Phase 3 | Human approval gate, git_diff pause, rollback | ✅ Complete |
 | Phase 4 | Multi-agent reviewer loop, auto-commit, escalation | ✅ Complete |
-| Phase 5 | React dashboard UI | ✅ Complete |
-| Phase 6 | Dynamic repo input — point agent at any repo via API | 🔜 Next |
+| Phase 5 | React dashboard UI (initial) | ✅ Complete |
+| Phase 6 | Dynamic repo input — `repo_url` on `POST /tasks`, GitHub clone / local copy / default workspace | ✅ Complete |
+| Phase 7 | Vulcan Forge dashboard — branding, TRACE/DIFF/REVIEW, command bar, live token display, summary token stats, auto history load | ✅ Complete |
+| Phase 8 | Token efficiency — observation condensing, `<latest_read_file>` dedupe, `run_tests` prompt truncation, skip-LLM `run_tests` after successful write | ✅ Complete |
+| Phase 9 | Agent reliability — JSON extraction (string-aware braces, markdown fence strip), write-first prompts, redundant read block, idle read/list overrides + test context, no-op write rejection, size-based rewrite ratio, Docker `Popen` bufsize, successful-write-only double-write `run_tests` force | ✅ Complete |
+| Phase 10 | Provider-agnostic settings — custom API key, model, base URL per task | ✅ Complete |
+| Phase 11 | Production hardening — auth, rate limiting, sanitization, structured logging, Docker Compose, timeout, cleanup | ✅ Complete |
+| Phase 12 | Azure deployment — VM, Nginx, auto-restart, GitHub Actions CI/CD | ✅ Complete |
+| Phase 13 | SWE-bench Lite evaluation | 🔜 Next |
+| Phase 14 | GitHub Issue integration — read issue, write fix, open PR | 🔜 Planned |
+
+---
+
+## Deployment
+
+Live at: [your Azure URL here]
+
+Deployed on Azure VM (Standard_B2s, Ubuntu 22.04) behind Nginx.
+See [deployment guide](docs/DEPLOYMENT.md) for full Azure setup instructions.
 
 ---
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)

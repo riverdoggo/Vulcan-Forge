@@ -1,15 +1,54 @@
-version: "3"
+version: "3.9"
 
 services:
-
-  api:
-
-    build: ./backend
-
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vulcan-backend
     ports:
       - "8000:8000"
-
     volumes:
       - ./workspaces:/workspaces
+      - ./logs:/logs
+      - ./replays:/app/replays
+      - ./orchestrator.db:/orchestrator.db
+      - /var/run/docker.sock:/var/run/docker.sock
+    env_file:
+      - ./backend/.env
+    environment:
+      - WORKSPACE_ROOT=/workspaces
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: "/api"
+        VITE_API_KEY: ""
+    container_name: vulcan-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: vulcan-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped

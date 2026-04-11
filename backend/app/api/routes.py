@@ -1,19 +1,26 @@
 import asyncio
 import json
 import logging
+import time
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from app.auth import require_api_key
+from app.config.settings import GROQ_MODEL, SANDBOX_IMAGE
 from app.database import load_all_tasks, load_task_transcript
+from app.limiter import limiter
 from app.models.task import Task
 from app.orchestrator.orchestrator import Orchestrator
+from app.sanitize import sanitize_goal, sanitize_repo_url
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 orc = Orchestrator()
 _TERMINAL_TASK_STATUSES = {"completed", "rejected", "error", "max_steps_reached", "killed"}
+
+STARTUP_TIME = time.time()
 
 
 def detect_repo_type(repo_url: str) -> str:
@@ -28,14 +35,54 @@ def detect_repo_type(repo_url: str) -> str:
 class CreateTaskRequest(BaseModel):
     goal: str
     repo_url: str = ""
+    base_commit: str = ""
 
 
-@router.post("/tasks")
-def create_task(req: CreateTaskRequest, background_tasks: BackgroundTasks) -> Task:
-    goal = (req.goal or "").strip()
-    repo_url = (req.repo_url or "").strip()
+@router.get("/health")
+async def health_check():
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "uptime_seconds": round(time.time() - STARTUP_TIME),
+        "model": GROQ_MODEL,
+        "sandbox_image": SANDBOX_IMAGE,
+    }
+
+
+@router.post("/tasks", dependencies=[Depends(require_api_key)])
+@limiter.limit("10/minute")
+def create_task(
+    request: Request,
+    req: CreateTaskRequest,
+    background_tasks: BackgroundTasks,
+) -> Task:
+    try:
+        goal = sanitize_goal(req.goal)
+        repo_sanitized = sanitize_repo_url(req.repo_url if (req.repo_url or "").strip() else None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    repo_url = (repo_sanitized or "").strip()
+    base_commit = (req.base_commit or "").strip()
+    llm_override: dict[str, str] = {}
+    llm_key = (request.headers.get("X-LLM-Key") or "").strip()
+    llm_model = (request.headers.get("X-LLM-Model") or "").strip()
+    llm_base_url = (request.headers.get("X-LLM-Base-URL") or "").strip()
+    if llm_key:
+        llm_override["api_key"] = llm_key
+    if llm_model:
+        llm_override["model"] = llm_model
+    if llm_base_url:
+        llm_override["base_url"] = llm_base_url
     logger.info("POST /tasks goal=%s", goal[:80])
-    task = Task(goal=goal, repo_url=repo_url, repo_type=detect_repo_type(repo_url))
+    task = Task(
+        goal=goal,
+        repo_url=repo_url,
+        base_commit=base_commit,
+        repo_type=detect_repo_type(repo_url),
+    )
+    if llm_override:
+        object.__setattr__(task, "llm_override", llm_override)
     created = orc.create_task(task)
     if created.status == "running":
         background_tasks.add_task(orc.run_agent_async, created)
@@ -43,7 +90,8 @@ def create_task(req: CreateTaskRequest, background_tasks: BackgroundTasks) -> Ta
 
 
 @router.get("/tasks")
-def list_tasks() -> list[Task]:
+@limiter.limit("120/minute")
+def list_tasks(request: Request) -> list[Task]:
     return orc.list_tasks()
 
 
@@ -158,30 +206,33 @@ def get_task_diff(task_id: str):
     }
 
 
-@router.post("/tasks/{task_id}/approve")
-def approve_task(task_id: str):
+@router.post("/tasks/{task_id}/approve", dependencies=[Depends(require_api_key)])
+@limiter.limit("30/minute")
+def approve_task(request: Request, task_id: str):
     try:
         orc.approve_task(task_id)
         return {"status": "success"}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 class RejectRequest(BaseModel):
     reason: str = ""
 
 
-@router.post("/tasks/{task_id}/reject")
-def reject_task(task_id: str, req: RejectRequest):
+@router.post("/tasks/{task_id}/reject", dependencies=[Depends(require_api_key)])
+@limiter.limit("30/minute")
+def reject_task(request: Request, task_id: str, req: RejectRequest):
     try:
         orc.reject_task(task_id, req.reason)
         return {"status": "success"}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@router.post("/tasks/{task_id}/kill")
-async def kill_task(task_id: str):
+@router.post("/tasks/{task_id}/kill", dependencies=[Depends(require_api_key)])
+@limiter.limit("30/minute")
+async def kill_task(request: Request, task_id: str):
     """
     Stop a single task's agent and remove its sandbox container/workspace.
     Safe to call multiple times and when the container is already gone.

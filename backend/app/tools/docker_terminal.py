@@ -23,7 +23,7 @@ def _docker_exec_completed(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        bufsize=0,
+        bufsize=-1,
     )
     try:
         out_b, err_b = proc.communicate(timeout=timeout)

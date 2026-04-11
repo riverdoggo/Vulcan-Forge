@@ -32,6 +32,7 @@ class Task(BaseModel):
     workspace: dict | None = None
     created_at: str = Field(default_factory=_utc_iso)
     repo_url: str = ""
+    base_commit: str = ""
     repo_type: str = ""  # "github", "local", or "default"
     diff_output: str = ""
     rejection_reason: str = ""

@@ -1,0 +1,21 @@
+{
+  "api": "http://localhost:8000",
+  "split": "test",
+  "start": 0,
+  "limit": 10,
+  "resolved": 0,
+  "total": 1,
+  "results": [
+    {
+      "instance_id": "astropy__astropy-12907",
+      "task_id": "",
+      "status": "submit_or_poll_error: HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=30)",
+      "elapsed_sec": 32.06805634498596,
+      "repo": "astropy/astropy",
+      "base_commit": "d16bfe05a744909de4b27f5875fe0d4ed41ce607",
+      "error_message": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=30)",
+      "escalation_reason": "",
+      "reviewer_status": ""
+    }
+  ]
+}

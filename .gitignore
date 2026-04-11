@@ -1,5 +1,9 @@
 # Local env
 .env
+backend/.env
+frontend/.env
+*.env
+!**/.env.example
 *.env.local
 
 # Python
@@ -26,7 +30,10 @@ workspaces/
 replays/
 logs/
 *.log
+logs/*.log
+orchestrator.db
 
 # Frontend
 frontend/node_modules/
+frontend/dist/
 frontend/build/

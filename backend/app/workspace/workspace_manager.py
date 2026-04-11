@@ -35,6 +35,14 @@ def _container_name(task_id: str) -> str:
     return f"agent_ws_{_sanitize_task_id(task_id)}"
 
 
+def cleanup_task_workspace(task_id: str) -> None:
+    """
+    Remove the Docker container and workspace directory for a task.
+    Delegates to terminate_workspace_container (idempotent).
+    """
+    terminate_workspace_container(task_id, remove_workspace_dir=True)
+
+
 def _copy_top_level_files_only(src: Path, dst: Path) -> None:
     """Match legacy test_repo behavior: copy only top-level files."""
     dst.mkdir(parents=True, exist_ok=True)
@@ -68,15 +76,29 @@ def prepare_workspace(task: Task, workspace_path: Path) -> None:
         try:
             logger.info("Git clone starting: url=%s dest=%s", task.repo_url, clone_dir)
             result = subprocess.run(
-                ["git", "clone", "--depth", "1", task.repo_url, str(clone_dir)],
+                ["git", "clone", task.repo_url, str(clone_dir)],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=180,
             )
             if result.returncode != 0:
                 err = (result.stderr or result.stdout or "").strip() or "(no stderr)"
                 logger.error("Git clone failed (rc=%s): %s", result.returncode, err)
                 raise ValueError(f"Git clone failed: {err}")
+            base_commit = (getattr(task, "base_commit", "") or "").strip()
+            if base_commit:
+                logger.info("Checking out base commit %s in %s", base_commit, clone_dir)
+                checkout = subprocess.run(
+                    ["git", "checkout", base_commit],
+                    cwd=str(clone_dir),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                if checkout.returncode != 0:
+                    err = (checkout.stderr or checkout.stdout or "").strip() or "(no stderr)"
+                    logger.error("Git checkout failed for %s: %s", base_commit, err)
+                    raise ValueError(f"Git checkout failed for base_commit {base_commit}: {err}")
             logger.info("Git clone succeeded for %s", task.repo_url)
             _copy_tree_into_workspace(clone_dir, workspace_path, skip_git=True)
         finally:

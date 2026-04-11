@@ -1,31 +1,53 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
-const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:8000";
+const _viteApi = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const API_BASE =
+  _viteApi.startsWith("/") && typeof window !== "undefined"
+    ? `${window.location.origin}${_viteApi.replace(/\/$/, "")}`
+    : _viteApi.replace(/\/$/, "");
+
+const API_KEY = import.meta.env.VITE_API_KEY || "";
+const DEFAULT_SETTINGS = {
+  providerName: "",
+  modelName: "",
+  apiKey: "",
+  baseUrl: "",
+  useServerDefault: true,
+};
+
+const authFetch = (url, options = {}) => {
+  const headers = { ...(options.headers || {}) };
+  if (API_KEY) headers["X-API-Key"] = API_KEY;
+  if (options.body != null && headers["Content-Type"] == null) {
+    headers["Content-Type"] = "application/json";
+  }
+  return fetch(url, { ...options, headers });
+};
 const TERMINAL = new Set(["completed", "rejected", "error", "max_steps_reached", "killed"]);
 const DIFF_VISIBLE = new Set(["awaiting_approval", "completed", "rejected"]);
 
 const TOOL_COLOR = {
-  list_directory: "#4C9BE8",
-  read_file:      "#7C6AF7",
-  write_file:     "#3DD68C",
-  run_tests:      "#C678DD",
-  git_diff:       "#E5C07B",
-  git_commit:     "#56B6C2",
-  reviewer_agent: "#E06C75",
+  list_directory: "#6B8CFF",
+  read_file:      "#A78BFA",
+  write_file:     "#4ADE80",
+  run_tests:      "#F472B6",
+  git_diff:       "#D97706",
+  git_commit:     "#22D3EE",
+  reviewer_agent: "#FB923C",
 };
-const toolColor = (t) => TOOL_COLOR[(t||"").toLowerCase()] || "#5A6472";
+const toolColor = (t) => TOOL_COLOR[(t || "").toLowerCase()] || "#52504A";
 
 const STATUS_COLOR = {
-  running:           "#4C9BE8",
-  completed:         "#3DD68C",
-  awaiting_approval: "#E5C07B",
-  rejected:          "#E06C75",
-  error:             "#E06C75",
-  max_steps_reached: "#C678DD",
-  killed:            "#E06C75",
-  pending:           "#5A6472",
+  running:           "#D97706",
+  completed:         "#4ADE80",
+  awaiting_approval: "#FBBF24",
+  rejected:          "#F87171",
+  error:             "#F87171",
+  max_steps_reached: "#A78BFA",
+  killed:            "#F87171",
+  pending:           "#52504A",
 };
-const statusColor = (s) => STATUS_COLOR[s] || "#5A6472";
+const statusColor = (s) => STATUS_COLOR[s] || "#52504A";
 
 function repoDisplayLabel(repoUrl) {
   if (!repoUrl) return null;
@@ -94,10 +116,10 @@ function StepRow({ step, index }) {
 
   const verdictType = res?.verdict_type || "";
   const verdictColor =
-    verdictType === "approved" ? "#3DD68C"
-    : verdictType === "needs_changes" ? "#E5C07B"
-    : verdictType === "escalate_to_human" ? "#E06C75"
-    : "#5A6472";
+    verdictType === "approved" ? "#4ADE80"
+    : verdictType === "needs_changes" ? "#FBBF24"
+    : verdictType === "escalate_to_human" ? "#F87171"
+    : "#52504A";
 
   return (
     <div className="step" style={{ "--bc": color }}>
@@ -113,7 +135,7 @@ function StepRow({ step, index }) {
             {verdictType.replace(/_/g," ")}
           </span>
         )}
-        <span className="step-st" style={{ color: status==="success"?"#3DD68C" : status==="error"?"#E06C75" : "#5A6472" }}>
+        <span className="step-st" style={{ color: status==="success"?"#4ADE80" : status==="error"?"#F87171" : "#52504A" }}>
           {status}
         </span>
         <span className="step-arr" style={{ transform: open?"rotate(90deg)":"none" }}>›</span>
@@ -178,9 +200,24 @@ function SummaryCard({ task, stepCount }) {
       {task.rejection_reason && (
         <div className="sum-note sum-err">✕ Rejected: {task.rejection_reason}</div>
       )}
-      <div className="sum-note">
-        Tokens used: {promptTokens.toLocaleString()} prompt / {completionTokens.toLocaleString()} completion
-      </div>
+      {(promptTokens > 0 || completionTokens > 0) && (
+        <div className="sum-token-row">
+          <div className="sum-stat">
+            <span className="sum-val sum-val-sm">{promptTokens.toLocaleString()}</span>
+            <span className="sum-lbl">PROMPT TOK</span>
+          </div>
+          <div className="sum-stat">
+            <span className="sum-val sum-val-sm">{completionTokens.toLocaleString()}</span>
+            <span className="sum-lbl">COMPLETION TOK</span>
+          </div>
+          <div className="sum-stat">
+            <span className="sum-val sum-val-sm" style={{ color: "var(--acc)" }}>
+              {(promptTokens + completionTokens).toLocaleString()}
+            </span>
+            <span className="sum-lbl">TOTAL</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -190,6 +227,15 @@ export default function App() {
   const [selectedId,  setSelectedId]  = useState(null);
   const [goal,        setGoal]        = useState("");
   const [repoUrl,     setRepoUrl]     = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState(() => {
+    try {
+      const stored = localStorage.getItem("vulcan_settings");
+      return stored ? { ...DEFAULT_SETTINGS, ...JSON.parse(stored) } : DEFAULT_SETTINGS;
+    } catch {
+      return DEFAULT_SETTINGS;
+    }
+  });
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [submitting,  setSubmitting]  = useState(false);
   const [formErr,     setFormErr]     = useState("");
@@ -204,6 +250,47 @@ export default function App() {
   const logEndRef  = useRef(null);
   const logPollRef = useRef(null);
   const eventSourceRef = useRef(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const historyFetchLock = useRef(false);
+  const [backendOnline, setBackendOnline] = useState(null);
+
+  const saveSettings = useCallback((newSettings) => {
+    const merged = { ...DEFAULT_SETTINGS, ...newSettings };
+    setSettings(merged);
+    localStorage.setItem("vulcan_settings", JSON.stringify(merged));
+  }, []);
+
+  const resetSettings = useCallback(() => {
+    setSettings(DEFAULT_SETTINGS);
+    localStorage.removeItem("vulcan_settings");
+  }, []);
+
+  const providerReady = settings.useServerDefault || Boolean((settings.apiKey || "").trim());
+  const providerIndicatorLabel = settings.useServerDefault
+    ? "Server default"
+    : (settings.apiKey || "").trim()
+      ? `${settings.providerName || "Custom"} · ${settings.modelName || "?"}`
+      : "No provider configured";
+  const settingsActiveLabel = settings.useServerDefault
+    ? "Server default"
+    : (settings.apiKey || "").trim()
+      ? `${settings.providerName || "Custom"} · ${settings.modelName || "unknown model"}`
+      : "No key configured";
+
+  const buildTaskHeaders = useCallback(() => {
+    const headers = { "Content-Type": "application/json" };
+    if (API_KEY) headers["X-API-Key"] = API_KEY;
+
+    const apiKey = (settings.apiKey || "").trim();
+    const modelName = (settings.modelName || "").trim();
+    const baseUrl = (settings.baseUrl || "").trim();
+    if (!settings.useServerDefault && apiKey) {
+      headers["X-LLM-Key"] = apiKey;
+      if (modelName) headers["X-LLM-Model"] = modelName;
+      if (baseUrl) headers["X-LLM-Base-URL"] = baseUrl;
+    }
+    return headers;
+  }, [settings]);
 
   const selected = useMemo(
     () => tasks.find(t => t.id === selectedId) || null,
@@ -218,6 +305,24 @@ export default function App() {
       return { ...prev, [taskId]: next.slice(-50) };
     });
   }, []);
+
+  const checkBackendHealth = useCallback(async () => {
+    try {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 5000);
+      const r = await fetch(`${API_BASE}/health`, { signal: ac.signal });
+      clearTimeout(t);
+      setBackendOnline(r.ok);
+    } catch {
+      setBackendOnline(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkBackendHealth();
+    const id = setInterval(checkBackendHealth, 30000);
+    return () => clearInterval(id);
+  }, [checkBackendHealth]);
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -245,20 +350,23 @@ export default function App() {
   }, [historyLoaded]);
 
   useEffect(() => {
-    fetchTasks();
+    void fetchTasks();
     const id = setInterval(fetchTasks, 2500);
     return () => clearInterval(id);
   }, [fetchTasks]);
 
   const loadHistory = async () => {
+    if (historyLoaded || historyFetchLock.current) return;
+    historyFetchLock.current = true;
+    setHistoryLoading(true);
     try {
       const r = await fetch(`${API_BASE}/tasks/history`);
       if (!r.ok) return;
       const data = await r.json();
       const list = Array.isArray(data) ? data : [];
-      setTasks(prev => {
-        const ids = new Set(prev.map(t => t.id));
-        const newTasks = list.filter(t => t.id && !ids.has(t.id));
+      setTasks((prev) => {
+        const ids = new Set(prev.map((t) => t.id));
+        const newTasks = list.filter((t) => t.id && !ids.has(t.id));
         const merged = [...prev, ...newTasks];
         return merged.sort((a, b) => {
           const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
@@ -269,6 +377,9 @@ export default function App() {
       setHistoryLoaded(true);
     } catch (e) {
       console.error("History load failed:", e);
+    } finally {
+      historyFetchLock.current = false;
+      setHistoryLoading(false);
     }
   };
 
@@ -352,7 +463,7 @@ export default function App() {
     try {
       const r = await fetch(`${API_BASE}/tasks`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildTaskHeaders(),
         body: JSON.stringify({ goal: g, repo_url: repoUrl.trim() }),
       });
       if (!r.ok) throw new Error();
@@ -368,15 +479,14 @@ export default function App() {
 
   const approve = async () => {
     if (!selected) return;
-    await fetch(`${API_BASE}/tasks/${selected.id}/approve`, { method: "POST" });
+    await authFetch(`${API_BASE}/tasks/${selected.id}/approve`, { method: "POST" });
     fetchTasks(); fetchLogs(selected.id);
   };
 
   const reject = async () => {
     if (!selected) return;
-    await fetch(`${API_BASE}/tasks/${selected.id}/reject`, {
+    await authFetch(`${API_BASE}/tasks/${selected.id}/reject`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reason: rejectText }),
     });
     setRejectOpen(false); setRejectText("");
@@ -387,7 +497,7 @@ export default function App() {
     if (!selected) return;
     if (!window.confirm("Are you sure you want to terminate this agent?")) return;
     try {
-      const r = await fetch(`${API_BASE}/tasks/${selected.id}/kill`, { method: "POST" });
+      const r = await authFetch(`${API_BASE}/tasks/${selected.id}/kill`, { method: "POST" });
       if (!r.ok) return;
       setTasks((prev) =>
         prev.map((t) => (t.id === selected.id ? { ...t, status: "killed" } : t))
@@ -440,28 +550,27 @@ export default function App() {
 
     try {
       if (cmd === "/approve") {
-        await fetch(`${API_BASE}/tasks/${selected.id}/approve`, { method: "POST" });
+        await authFetch(`${API_BASE}/tasks/${selected.id}/approve`, { method: "POST" });
         appendCommandLog(selected.id, "Approved current task.", "success");
         await fetchTasks();
         await fetchLogs(selected.id);
       } else if (cmd === "/reject") {
-        await fetch(`${API_BASE}/tasks/${selected.id}/reject`, {
+        await authFetch(`${API_BASE}/tasks/${selected.id}/reject`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ reason: arg }),
         });
         appendCommandLog(selected.id, `Rejected current task${arg ? `: ${arg}` : "."}`, "success");
         await fetchTasks();
         await fetchLogs(selected.id);
       } else if (cmd === "/stop") {
-        await fetch(`${API_BASE}/tasks/${selected.id}/kill`, { method: "POST" });
+        await authFetch(`${API_BASE}/tasks/${selected.id}/kill`, { method: "POST" });
         appendCommandLog(selected.id, "Stop requested for current task.", "success");
         await fetchTasks();
         await fetchLogs(selected.id);
       } else if (cmd === "/retry") {
         const r = await fetch(`${API_BASE}/tasks`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: buildTaskHeaders(),
           body: JSON.stringify({ goal: selected.goal || "", repo_url: selected.repo_url || "" }),
         });
         if (!r.ok) throw new Error("retry failed");
@@ -471,11 +580,13 @@ export default function App() {
         setSelectedId(d.id);
         setTab("log");
       } else if (cmd === "/status") {
-        const promptTokens = Number(selected.total_prompt_tokens || 0).toLocaleString();
-        const completionTokens = Number(selected.total_completion_tokens || 0).toLocaleString();
+        const prompt = Number(selected.total_prompt_tokens || 0);
+        const completion = Number(selected.total_completion_tokens || 0);
+        const total = prompt + completion;
+        const dailyRemaining = Math.max(0, 100000 - total);
         appendCommandLog(
           selected.id,
-          `Status: ${selected.status} | Steps: ${steps.length} | Tokens: ${promptTokens} prompt / ${completionTokens} completion`,
+          `status: ${selected.status} | steps: ${steps.length} | prompt: ${prompt.toLocaleString()} | completion: ${completion.toLocaleString()} | total: ${total.toLocaleString()} | ~daily remaining: ${dailyRemaining.toLocaleString()}`,
           "info"
         );
       } else {
@@ -498,37 +609,46 @@ export default function App() {
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&family=DM+Serif+Display:ital@0;1&display=swap');
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         :root {
-          --bg0: #0e1117; --bg1: #161b22; --bg2: #1c2128; --bg3: #262d36;
-          --bd: #30363d; --bd2: #3d444d;
-          --t1: #e6edf3; --t2: #8b949e; --t3: #6e7681;
-          --acc: #388bfd;
-          --font: 'Inter', system-ui, sans-serif;
-          --mono: 'JetBrains Mono', monospace;
+          --bg0: #0C0C0E;
+          --bg1: #111114;
+          --bg2: #18181C;
+          --bg3: #1F1F24;
+          --bd: #26262C;
+          --bd2: #32323A;
+          --t1: #F0EEE8;
+          --t2: #8A887E;
+          --t3: #52504A;
+          --acc: #D97706;
+          --acc-dim: #92400E;
+          --font-mono: 'Geist Mono', monospace;
+          --font-display: 'DM Serif Display', serif;
         }
         html, body, #root {
           height: 100%; width: 100%; overflow: hidden;
           background: var(--bg0); color: var(--t1);
-          font-family: var(--font); font-size: 13px; line-height: 1.5;
+          font-family: var(--font-mono); font-size: 13px; line-height: 1.5;
           -webkit-font-smoothing: antialiased;
         }
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: var(--bd2); border-radius: 3px; }
-        button { font-family: var(--font); cursor: pointer; }
-        input, textarea { font-family: var(--font); }
+        ::-webkit-scrollbar-thumb { background: var(--bd2); border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--acc-dim); }
+        button { font-family: var(--font-mono); cursor: pointer; }
+        input, textarea { font-family: var(--font-mono); }
 
         .shell {
           display: grid;
-          grid-template-columns: 240px 1fr;
+          grid-template-columns: 260px 1fr;
           height: 100vh;
           overflow: hidden;
         }
 
         /* SIDEBAR */
         .sidebar {
+          position: relative;
           display: grid;
           grid-template-rows: auto auto 1fr;
           height: 100vh;
@@ -536,6 +656,21 @@ export default function App() {
           border-right: 1px solid var(--bd);
           background: var(--bg1);
         }
+        .sidebar::after {
+          content: '';
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          background: repeating-linear-gradient(
+            0deg,
+            transparent,
+            transparent 2px,
+            rgba(255,255,255,0.012) 2px,
+            rgba(255,255,255,0.012) 3px
+          );
+          z-index: 0;
+        }
+        .sidebar > * { position: relative; z-index: 1; }
         .sb-main {
           display: flex;
           flex-direction: column;
@@ -543,91 +678,369 @@ export default function App() {
           overflow: hidden;
         }
         .sb-brand {
-          padding: 12px 14px;
+          padding: 14px 16px;
           border-bottom: 1px solid var(--bd);
           display: flex; align-items: baseline; gap: 7px;
         }
-        .sb-brand-name { font-size: 13px; font-weight: 600; color: var(--t1); letter-spacing: -0.01em; }
+        .sb-brand-name {
+          font-family: var(--font-mono);
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.15em;
+          text-transform: uppercase;
+          color: var(--t1);
+        }
         .sb-brand-ver {
-          font-size: 10px; font-family: var(--mono); color: var(--t3);
-          background: var(--bg3); padding: 1px 5px; border-radius: 3px;
+          font-family: var(--font-mono);
+          font-size: 9px;
+          color: var(--acc);
+          background: #92400E22;
+          border: 1px solid var(--acc-dim);
+          padding: 1px 5px;
+          border-radius: 2px;
+          letter-spacing: 0.05em;
         }
-        .sb-input { padding: 10px; border-bottom: 1px solid var(--bd); }
+        .sb-input { padding: 12px; border-bottom: 1px solid var(--bd); }
         .sb-input textarea {
-          width: 100%; background: var(--bg0); border: 1px solid var(--bd);
-          border-radius: 6px; padding: 8px 10px; color: var(--t1);
-          font-size: 12px; resize: none; line-height: 1.5; height: 76px;
-          transition: border-color 0.15s;
+          width: 100%;
+          background: var(--bg0);
+          border: 1px solid var(--bd);
+          border-radius: 4px;
+          padding: 10px 12px;
+          color: var(--t1);
+          font-family: var(--font-mono);
+          font-size: 12px;
+          resize: none;
+          line-height: 1.5;
+          height: 80px;
+          transition: border-color 0.15s, box-shadow 0.15s;
         }
-        .sb-input textarea:focus { outline: none; border-color: var(--acc); }
+        .sb-input textarea:focus {
+          outline: none;
+          border-color: var(--acc);
+          box-shadow: 0 0 0 2px #92400E33;
+        }
         .sb-input textarea::placeholder { color: var(--t3); }
         .repo-input {
           width: 100%;
-          margin-top: 5px;
+          margin-top: 6px;
           background: var(--bg0);
           border: 1px solid var(--bd);
-          border-radius: 6px;
+          border-radius: 4px;
+          padding: 7px 12px;
+          color: var(--t1);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .repo-input:focus {
+          outline: none;
+          border-color: var(--acc);
+          box-shadow: 0 0 0 2px #92400E33;
+        }
+        .repo-input::placeholder { color: var(--t3); }
+        .sb-submit {
+          margin-top: 8px;
+          width: 100%;
+          padding: 8px 0;
+          background: var(--acc);
+          color: #0C0C0E;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          border: none;
+          border-radius: 4px;
+          transition: opacity 0.15s, transform 0.15s;
+        }
+        .sb-submit:disabled { opacity: 0.35; cursor: not-allowed; }
+        .sb-submit:hover:not(:disabled) { opacity: 0.88; transform: translateY(-1px); }
+        .sb-err { margin-top: 5px; font-size: 11px; color: #F87171; }
+        .sb-list { flex: 1; overflow-y: auto; padding: 6px; min-height: 0; }
+        .no-tasks {
+          padding: 20px 10px;
+          text-align: center;
+          font-family: var(--font-mono);
+          color: var(--t3);
+          font-size: 12px;
+        }
+        .load-history-btn {
+          flex-shrink: 0;
+          margin: 8px 10px 10px;
+          padding: 8px 10px;
+          width: calc(100% - 20px);
+          box-sizing: border-box;
+          background: transparent;
+          border: 1px solid var(--bd2);
+          border-radius: 4px;
+          color: var(--t2);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          cursor: pointer;
+          transition: border-color 0.15s, color 0.15s, background 0.15s;
+        }
+        .load-history-btn:hover:not(:disabled) {
+          border-color: var(--acc);
+          color: var(--acc);
+          background: #92400E14;
+        }
+        .load-history-btn:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
+
+        /* SETTINGS PANEL */
+        .settings-panel {
+          display: flex;
+          flex-direction: column;
+          flex: 1;
+          min-height: 0;
+          overflow: hidden;
+        }
+        .settings-hdr {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 10px 12px;
+          border-bottom: 1px solid var(--bd);
+        }
+        .settings-back {
+          background: none;
+          border: none;
+          color: var(--t3);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          cursor: pointer;
+          padding: 3px 6px;
+          border-radius: 3px;
+          letter-spacing: 0.05em;
+        }
+        .settings-back:hover { color: var(--t2); background: var(--bg2); }
+        .settings-title {
+          font-family: var(--font-mono);
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          color: var(--t2);
+        }
+        .settings-body {
+          flex: 1;
+          overflow-y: auto;
+          padding: 12px;
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+        }
+        .settings-toggle-row {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .settings-toggle-label {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          cursor: pointer;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          color: var(--t1);
+        }
+        .settings-toggle-label input[type="checkbox"] {
+          width: 14px;
+          height: 14px;
+          accent-color: var(--acc);
+          cursor: pointer;
+        }
+        .settings-fields {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .settings-field {
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+        }
+        .settings-label {
+          font-family: var(--font-mono);
+          font-size: 9px;
+          font-weight: 600;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: var(--t3);
+        }
+        .settings-optional {
+          font-weight: 400;
+          text-transform: none;
+          letter-spacing: 0;
+          color: var(--t3);
+          opacity: 0.6;
+        }
+        .settings-input {
+          width: 100%;
+          background: var(--bg0);
+          border: 1px solid var(--bd);
+          border-radius: 3px;
           padding: 6px 10px;
           color: var(--t1);
+          font-family: var(--font-mono);
           font-size: 11px;
-          font-family: var(--mono);
           transition: border-color 0.15s;
         }
-        .repo-input:focus { outline: none; border-color: var(--acc); }
-        .repo-input::placeholder { color: var(--t3); }
-        .repo-hint {
-          display: block;
-          font-size: 10px;
+        .settings-input:focus {
+          outline: none;
+          border-color: var(--acc);
+          box-shadow: 0 0 0 2px #92400E22;
+        }
+        .settings-input::placeholder { color: var(--t3); }
+        .settings-input-secret { letter-spacing: 0.08em; }
+        .settings-hint {
+          font-family: var(--font-mono);
+          font-size: 9px;
           color: var(--t3);
-          margin-top: 3px;
-          font-family: var(--mono);
+          line-height: 1.5;
         }
-        .sb-submit {
-          margin-top: 6px; width: 100%; padding: 7px 0;
-          background: var(--acc); border: none; border-radius: 6px;
-          color: #fff; font-size: 12px; font-weight: 500;
-          transition: opacity 0.15s;
+        .settings-quickfill {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 5px;
         }
-        .sb-submit:disabled { opacity: 0.4; cursor: not-allowed; }
-        .sb-submit:hover:not(:disabled) { opacity: 0.88; }
-        .sb-err { margin-top: 5px; font-size: 11px; color: #E06C75; }
-        .sb-list { flex: 1; overflow-y: auto; padding: 6px; min-height: 0; }
-        .load-history-btn {
-          width: calc(100% - 12px);
-          margin: 4px 6px 8px;
-          padding: 6px 0;
+        .settings-quickfill-btn {
+          font-family: var(--font-mono);
+          font-size: 9px;
+          font-weight: 600;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          padding: 4px 9px;
+          border-radius: 3px;
+          border: 1px solid var(--bd2);
+          background: var(--bg2);
+          color: var(--t2);
+          cursor: pointer;
+          transition: border-color 0.1s, color 0.1s;
+        }
+        .settings-quickfill-btn:hover {
+          border-color: var(--acc);
+          color: var(--acc);
+        }
+        .settings-active {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          padding: 8px 10px;
+          background: var(--bg2);
+          border: 1px solid var(--bd);
+          border-radius: 3px;
+        }
+        .settings-active-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+        .settings-active-label {
+          font-family: var(--font-mono);
+          font-size: 10px;
+          color: var(--t2);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .settings-clear {
+          width: 100%;
+          padding: 7px 0;
           background: transparent;
           border: 1px solid var(--bd);
-          border-radius: 6px;
+          border-radius: 3px;
           color: var(--t3);
-          font-size: 11px;
-          font-family: var(--mono);
+          font-family: var(--font-mono);
+          font-size: 10px;
           cursor: pointer;
           transition: border-color 0.15s, color 0.15s;
         }
-        .load-history-btn:hover:not(:disabled) { border-color: var(--bd2); color: var(--t2); }
-        .load-history-btn:disabled { opacity: 0.55; cursor: default; }
-        .no-tasks { padding: 20px 10px; text-align: center; color: var(--t3); font-size: 12px; }
+        .settings-clear:hover { border-color: var(--bd2); color: var(--t2); }
+        .settings-gear-btn {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          width: calc(100% - 12px);
+          margin: 4px 6px 8px;
+          padding: 7px 10px;
+          background: transparent;
+          border: 1px solid var(--bd);
+          border-radius: 3px;
+          color: var(--t3);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          cursor: pointer;
+          transition: border-color 0.15s, color 0.15s;
+          letter-spacing: 0.05em;
+        }
+        .settings-gear-btn:hover { border-color: var(--bd2); color: var(--t2); }
+        .settings-gear-btn svg { flex-shrink: 0; }
+        .provider-indicator {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-top: 5px;
+          padding: 0 2px;
+        }
+        .provider-dot {
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+        .provider-name {
+          font-family: var(--font-mono);
+          font-size: 9px;
+          color: var(--t3);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
 
         .task-item {
-          padding: 8px 10px; border-radius: 6px; border: 1px solid transparent;
-          cursor: pointer; background: transparent; text-align: left;
-          width: 100%; color: var(--t1); display: block; margin-bottom: 2px;
+          padding: 9px 12px;
+          border-radius: 4px;
+          border: 1px solid transparent;
+          cursor: pointer;
+          background: transparent;
+          text-align: left;
+          width: 100%;
+          color: var(--t1);
+          display: block;
+          margin-bottom: 1px;
           transition: background 0.1s, border-color 0.1s;
         }
-        .task-item:hover { background: var(--bg2); }
+        .task-item:hover { background: var(--bg2); border-color: var(--bd); }
         .task-item.sel { background: var(--bg2); border-color: var(--bd2); }
         .task-goal {
-          font-size: 12px; line-height: 1.35; color: var(--t1);
-          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px;
+          font-family: var(--font-mono);
+          font-size: 11.5px;
+          line-height: 1.4;
+          color: var(--t1);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          margin-bottom: 5px;
         }
         .task-meta {
-          display: flex; align-items: center; gap: 5px;
-          font-size: 10px; font-family: var(--mono); color: var(--t3);
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          color: var(--t3);
         }
         .task-repo {
+          font-family: var(--font-mono);
           font-size: 10px;
-          font-family: var(--mono);
           color: var(--t3);
           white-space: nowrap;
           overflow: hidden;
@@ -648,132 +1061,277 @@ export default function App() {
           background: var(--bg0);
         }
         .task-hdr {
-          padding: 9px 16px; border-bottom: 1px solid var(--bd);
-          background: var(--bg1); display: flex; align-items: center;
-          gap: 10px; min-height: 42px;
+          padding: 10px 20px;
+          border-bottom: 1px solid var(--bd);
+          background: var(--bg1);
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-height: 48px;
         }
         .task-hdr-goal {
-          font-size: 13px; font-weight: 500; flex: 1;
-          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          font-family: var(--font-display);
+          font-size: 17px;
+          font-weight: normal;
+          font-style: italic;
+          color: var(--t1);
+          flex: 1;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
         .status-pill {
-          font-size: 10px; font-family: var(--mono);
-          padding: 2px 7px; border-radius: 3px; border: 1px solid;
-          white-space: nowrap; flex-shrink: 0;
+          font-family: var(--font-mono);
+          font-size: 9px;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          padding: 3px 8px;
+          border-radius: 2px;
+          border: 1px solid;
+          white-space: nowrap;
+          flex-shrink: 0;
+        }
+        .token-counter {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          color: var(--t3);
+          background: var(--bg3);
+          border: 1px solid var(--bd);
+          border-radius: 3px;
+          padding: 2px 8px;
+          white-space: nowrap;
+          flex-shrink: 0;
+          transition: color 0.3s, border-color 0.3s;
+        }
+        .token-counter.ticking {
+          color: var(--acc);
+          border-color: var(--acc-dim);
+        }
+        .token-icon {
+          font-size: 9px;
+          opacity: 0.6;
+        }
+        .token-val {
+          font-weight: 600;
+          letter-spacing: 0.03em;
+        }
+        .token-lbl {
+          color: var(--t3);
+          font-size: 9px;
         }
         .hdr-pulse { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 
         .banner {
-          padding: 7px 16px; border-bottom: 1px solid #E5C07B33;
-          background: #E5C07B08; display: flex; align-items: center;
-          gap: 10px; flex-wrap: wrap;
+          padding: 8px 20px;
+          background: #FBBF2408;
+          border-bottom: 1px solid #FBBF2422;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
         }
-        .banner-esc { font-size: 11px; color: #E5C07B; flex: 1; min-width: 0; }
+        .banner-esc {
+          font-family: var(--font-mono);
+          font-size: 11px;
+          color: #FBBF24;
+          flex: 1;
+          min-width: 0;
+        }
         .banner-btns { display: flex; gap: 6px; align-items: center; margin-left: auto; }
         .btn-approve {
-          padding: 5px 12px; border-radius: 5px;
-          border: 1px solid #3DD68C55; background: #3DD68C18;
-          color: #3DD68C; font-size: 11px; font-weight: 500;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          padding: 6px 14px;
+          border-radius: 3px;
+          border: 1px solid #4ADE8055;
+          background: #4ADE8012;
+          color: #4ADE80;
         }
         .btn-fallback { opacity: 0.55; }
         .btn-fallback:hover { opacity: 0.8; }
-        .btn-approve:hover { background: #3DD68C28; }
+        .btn-approve:hover { background: #4ADE8022; }
         .btn-reject {
-          padding: 5px 12px; border-radius: 5px;
-          border: 1px solid #E06C7555; background: #E06C7518;
-          color: #E06C75; font-size: 11px; font-weight: 500;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          padding: 6px 14px;
+          border-radius: 3px;
+          border: 1px solid #F8717155;
+          background: #F8717112;
+          color: #F87171;
         }
-        .btn-reject:hover { background: #E06C7528; }
+        .btn-reject:hover { background: #F8717122; }
         .btn-ghost {
-          padding: 5px 10px; border-radius: 5px;
-          border: 1px solid var(--bd); background: transparent;
-          color: var(--t2); font-size: 11px;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          padding: 6px 14px;
+          border-radius: 3px;
+          border: 1px solid var(--bd2);
+          background: transparent;
+          color: var(--t2);
         }
-        .btn-kill {
-          padding: 5px 10px; border-radius: 5px;
-          border: 1px solid #E06C7555; background: #E06C7512;
-          color: #E06C75; font-size: 11px; font-weight: 500;
-          flex-shrink: 0;
-        }
-        .btn-kill:hover { background: #E06C7524; }
         .reject-row { width: 100%; display: flex; gap: 6px; margin-top: 4px; }
         .reject-row input {
-          flex: 1; background: var(--bg0); border: 1px solid var(--bd);
-          border-radius: 5px; padding: 5px 8px; color: var(--t1); font-size: 11px;
+          flex: 1;
+          background: var(--bg0);
+          border: 1px solid var(--bd);
+          border-radius: 5px;
+          padding: 5px 8px;
+          color: var(--t1);
+          font-family: var(--font-mono);
+          font-size: 11px;
         }
-        .reject-row input:focus { outline: none; border-color: var(--acc); }
+        .reject-row input:focus {
+          outline: none;
+          border-color: var(--acc);
+          box-shadow: 0 0 0 2px #92400E33;
+        }
 
         .tabs {
-          display: flex; border-bottom: 1px solid var(--bd);
-          background: var(--bg1); padding: 0 12px;
+          display: flex;
+          border-bottom: 1px solid var(--bd);
+          background: var(--bg1);
+          padding: 0 16px;
         }
         .tab-btn {
-          padding: 8px 12px; background: none; border: none;
-          border-bottom: 2px solid transparent; color: var(--t3);
-          font-size: 12px; font-weight: 500; transition: color 0.1s; margin-bottom: -1px;
+          padding: 10px 14px;
+          background: none;
+          border: none;
+          border-bottom: 2px solid transparent;
+          color: var(--t3);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          font-weight: 500;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          transition: color 0.1s;
+          margin-bottom: -1px;
         }
         .tab-btn:hover:not(:disabled) { color: var(--t2); }
-        .tab-btn.active { color: var(--t1); border-bottom-color: var(--acc); }
-        .tab-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .tab-btn.active { color: var(--t1); border-bottom: 2px solid var(--acc); }
+        .tab-btn:disabled { opacity: 0.25; cursor: not-allowed; }
 
         .panel { overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
         .log-scroll { flex: 1; overflow-y: auto; padding-bottom: 8px; }
 
         /* STEPS */
         .step {
-          border-left: 2px solid var(--bc, #5A6472);
-          margin: 0 12px 1px; border-radius: 0 4px 4px 0;
+          border-left: 2px solid var(--bc, #4B5563);
+          margin: 0 16px 1px;
+          border-radius: 0 3px 3px 0;
           background: var(--bg1);
           animation: fadeIn .18s ease;
         }
         .step:first-child { margin-top: 8px; }
         @keyframes fadeIn { from{opacity:0;transform:translateX(-3px)} to{opacity:1;transform:none} }
         .step-hd {
-          width: 100%; display: flex; align-items: center; gap: 7px;
-          padding: 5px 10px; background: none; border: none; color: var(--t1); text-align: left;
+          width: 100%;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 5px 12px;
+          background: none;
+          border: none;
+          color: var(--t1);
+          text-align: left;
         }
-        .step-hd:hover { background: var(--bg2); border-radius: 0 4px 4px 0; }
-        .step-num { font-family: var(--mono); font-size: 10px; color: var(--t3); min-width: 20px; }
+        .step-hd:hover { background: var(--bg2); border-radius: 0 3px 3px 0; }
+        .step-num {
+          font-family: var(--font-mono);
+          font-size: 9px;
+          color: var(--t3);
+          min-width: 22px;
+        }
         .step-tag {
-          font-family: var(--mono); font-size: 10px; font-weight: 500;
-          padding: 2px 6px; border-radius: 3px; white-space: nowrap; flex-shrink: 0;
+          font-family: var(--font-mono);
+          font-size: 9px;
+          font-weight: 600;
+          letter-spacing: 0.05em;
+          padding: 2px 7px;
+          border-radius: 2px;
+          white-space: nowrap;
+          flex-shrink: 0;
         }
         .step-inp {
-          font-family: var(--mono); font-size: 11px; color: var(--t2);
-          min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          font-family: var(--font-mono);
+          font-size: 10.5px;
+          color: var(--t2);
+          min-width: 0;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
         .step-spacer { flex: 1; }
         .verdict-chip {
-          font-size: 10px; font-family: var(--mono);
-          padding: 2px 7px; border-radius: 3px; white-space: nowrap; flex-shrink: 0;
+          font-family: var(--font-mono);
+          font-size: 9px;
+          letter-spacing: 0.05em;
+          text-transform: uppercase;
+          padding: 2px 7px;
+          border-radius: 2px;
+          white-space: nowrap;
+          flex-shrink: 0;
         }
         .step-st {
-          font-family: var(--mono); font-size: 10px;
-          white-space: nowrap; flex-shrink: 0; min-width: 48px; text-align: right;
+          font-family: var(--font-mono);
+          font-size: 9px;
+          white-space: nowrap;
+          flex-shrink: 0;
+          min-width: 44px;
+          text-align: right;
         }
         .step-arr { color: var(--t3); font-size: 14px; transition: transform 0.15s; flex-shrink: 0; line-height: 1; }
-        .step-body { padding: 0 10px 10px; border-top: 1px solid var(--bd); }
+        .step-body { padding: 0 12px 10px; border-top: 1px solid var(--bd); }
         .review-detail {
-          padding: 8px 10px; margin: 8px 0 4px;
-          border-radius: 3px; background: var(--bg2);
+          padding: 8px 10px;
+          margin: 8px 0 4px;
+          border-radius: 3px;
+          background: var(--bg2);
         }
         .rv-reason { font-size: 12px; color: var(--t1); line-height: 1.5; }
         .rv-sug { font-size: 11px; color: var(--t2); margin-top: 4px; line-height: 1.4; }
         .rv-it {
-          display: inline-block; margin-top: 6px; font-size: 10px;
-          font-family: var(--mono); color: var(--t3);
-          background: var(--bg3); padding: 1px 6px; border-radius: 3px;
+          display: inline-block;
+          margin-top: 6px;
+          font-size: 10px;
+          font-family: var(--font-mono);
+          color: var(--t3);
+          background: var(--bg3);
+          padding: 1px 6px;
+          border-radius: 3px;
         }
         .step-out {
-          font-family: var(--mono); font-size: 11px; line-height: 1.55;
-          color: #adbac7; white-space: pre-wrap; word-break: break-word;
-          margin-top: 8px; max-height: 260px; overflow-y: auto;
+          font-family: var(--font-mono);
+          font-size: 10.5px;
+          line-height: 1.6;
+          color: var(--t2);
+          white-space: pre-wrap;
+          word-break: break-word;
+          margin-top: 8px;
+          max-height: 280px;
+          overflow-y: auto;
         }
 
         /* RUNNING */
         .running-row {
-          display: flex; align-items: center; gap: 5px;
-          padding: 8px 14px; color: var(--t3); font-size: 11px; font-family: var(--mono);
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          color: var(--t3);
+          padding: 10px 18px;
         }
         @keyframes blink { 0%,100%{opacity:.2} 50%{opacity:1} }
         .dot-a { width:4px;height:4px;border-radius:50%;background:var(--acc);animation:blink 1s 0s infinite; }
@@ -781,63 +1339,128 @@ export default function App() {
         .dot-c { width:4px;height:4px;border-radius:50%;background:var(--acc);animation:blink 1s .4s infinite; }
 
         /* DIFF */
-        .diff-wrap { font-family: var(--mono); font-size: 11.5px; line-height: 1.6; padding: 6px 0; }
-        .diff-line { padding: 0 16px; white-space: pre-wrap; word-break: break-all; }
-        .dl-add  { background: #2ea04326; color: #7ee787; }
-        .dl-rem  { background: #f8514926; color: #ff7b72; }
-        .dl-hunk { background: #388bfd18; color: #79c0ff; }
+        .diff-wrap {
+          font-family: var(--font-mono);
+          font-size: 11px;
+          line-height: 1.65;
+          padding: 8px 0;
+        }
+        .diff-line { padding: 1px 20px; white-space: pre-wrap; word-break: break-all; }
+        .dl-add  { background: #4ADE8014; color: #86EFAC; }
+        .dl-rem  { background: #F8717114; color: #FCA5A5; }
+        .dl-hunk { background: #D9770614; color: #FCD34D; }
         .dl-meta { color: var(--t3); }
-        .dl-ctx  { color: #adbac7; }
+        .dl-ctx  { color: var(--t2); }
 
         /* REVIEW CARDS */
         .review-scroll { padding: 10px 12px; }
         .rcard {
-          background: var(--bg1); border: 1px solid var(--bd);
-          border-radius: 6px; padding: 12px 14px; margin-bottom: 8px;
+          background: var(--bg1);
+          border: 1px solid var(--bd);
+          border-radius: 4px;
+          padding: 14px 16px;
+          margin-bottom: 8px;
         }
         .rcard-hdr { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
         .rcard-cycle {
-          font-size: 10px; font-family: var(--mono); color: var(--t3);
-          background: var(--bg3); padding: 1px 6px; border-radius: 3px;
+          font-family: var(--font-mono);
+          font-size: 9px;
+          background: var(--bg3);
+          color: var(--t3);
+          border-radius: 2px;
+          padding: 2px 7px;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
         }
         .rcard-verdict {
-          font-size: 11px; font-family: var(--mono);
-          padding: 1px 7px; border-radius: 3px;
+          font-family: var(--font-mono);
+          font-size: 9px;
+          border-radius: 2px;
+          padding: 2px 7px;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
         }
         .rcard p { font-size: 12px; color: var(--t2); line-height: 1.5; }
         .rcard p + p { margin-top: 5px; color: var(--t3); }
 
         /* SUMMARY */
         .summary {
-          margin: 10px 12px 12px; padding: 14px 16px;
-          background: var(--bg1); border: 1px solid var(--bd); border-radius: 8px;
+          margin: 12px 16px;
+          padding: 16px 18px;
+          background: var(--bg1);
+          border: 1px solid var(--bd);
+          border-radius: 4px;
+          border-left: 3px solid var(--acc);
         }
         .sum-status {
-          display: flex; align-items: center; gap: 7px;
-          font-size: 11px; font-family: var(--mono); font-weight: 500;
-          letter-spacing: 0.06em; margin-bottom: 12px;
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          margin-bottom: 14px;
         }
         .sum-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
         .sum-stats { display:flex; gap:28px; }
         .sum-stat { display:flex; flex-direction:column; gap:1px; }
-        .sum-val { font-size:26px; font-family:var(--mono); font-weight:500; color:var(--t1); line-height:1.1; }
-        .sum-pass { font-size:18px; }
-        .sum-lbl { font-size:9px; font-family:var(--mono); color:var(--t3); letter-spacing:0.08em; }
-        .sum-note { margin-top:10px; font-size:11px; line-height:1.4; }
-        .sum-warn { color:#E5C07B; }
-        .sum-err  { color:#E06C75; }
+        .sum-val {
+          font-family: var(--font-mono);
+          font-size: 28px;
+          font-weight: 500;
+          color: var(--t1);
+          line-height: 1.1;
+        }
+        .sum-pass { font-size: 18px; }
+        .sum-lbl {
+          font-family: var(--font-mono);
+          font-size: 9px;
+          color: var(--t3);
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+        }
+        .sum-note {
+          margin-top: 10px;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          line-height: 1.4;
+        }
+        .sum-warn { color: #FBBF24; }
+        .sum-err  { color: #F87171; }
+        .sum-token-row {
+          display: flex;
+          gap: 24px;
+          margin-top: 14px;
+          padding-top: 12px;
+          border-top: 1px solid var(--bd);
+        }
+        .sum-val-sm {
+          font-size: 18px !important;
+        }
 
         /* EMPTY */
         .empty-main {
-          display:flex; align-items:center; justify-content:center;
-          height:100%; flex-direction:column; gap:8px; color:var(--t3);
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          height:100%;
+          flex-direction:column;
+          gap:8px;
+          color: var(--t3);
         }
-        .empty-main span { font-size:12px; }
-        .empty-msg { padding:20px 16px; color:var(--t3); font-size:12px; }
+        .empty-main svg { color: var(--t3); stroke: var(--t3); }
+        .empty-main span {
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 0.05em;
+          color: var(--t3);
+        }
+        .empty-msg { padding:20px 16px; color:var(--t3); font-size:12px; font-family: var(--font-mono); }
         .cmd-wrap {
           border-top: 1px solid var(--bd);
           background: var(--bg1);
-          padding: 8px 12px;
+          padding: 8px 14px;
         }
         .cmd-row {
           display: flex;
@@ -848,47 +1471,101 @@ export default function App() {
           flex: 1;
           background: var(--bg0);
           border: 1px solid var(--bd);
-          border-radius: 6px;
+          border-radius: 3px;
           color: var(--t1);
-          font-family: var(--mono);
-          font-size: 12px;
-          padding: 7px 10px;
+          font-family: var(--font-mono);
+          font-size: 11.5px;
+          padding: 7px 12px;
         }
-        .cmd-input:focus { outline: none; border-color: var(--acc); }
+        .cmd-input:focus {
+          outline: none;
+          border-color: var(--acc);
+          box-shadow: 0 0 0 2px #92400E22;
+        }
         .cmd-send {
+          font-family: var(--font-mono);
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
           border: 1px solid var(--bd2);
           background: var(--bg2);
-          color: var(--t1);
-          border-radius: 6px;
-          padding: 7px 10px;
-          font-size: 11px;
+          color: var(--t2);
+          border-radius: 3px;
+          padding: 7px 12px;
+          transition: border-color 0.15s, color 0.15s;
         }
+        .cmd-send:hover { border-color: var(--acc); color: var(--acc); }
         .cmd-hint {
-          margin-top: 6px;
+          font-family: var(--font-mono);
           font-size: 10px;
           color: var(--t3);
-          font-family: var(--mono);
+          margin-top: 5px;
         }
         .cmd-log {
-          margin: 8px 12px 0;
-          padding: 6px 8px;
-          border-radius: 6px;
-          background: var(--bg1);
-          border: 1px solid var(--bd);
-          font-family: var(--mono);
-          font-size: 11px;
+          font-family: var(--font-mono);
+          font-size: 10.5px;
+          border-radius: 3px;
+          margin: 4px 0;
           color: var(--t2);
         }
-        .cmd-log.error { color: #E06C75; }
-        .cmd-log.success { color: #3DD68C; }
+        .cmd-log.error { color: #F87171; }
+        .cmd-log.success { color: #4ADE80; }
+
+        .offline-banner {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          z-index: 1000;
+          background: #F8717122;
+          border-bottom: 1px solid #F8717166;
+          color: #FCA5A5;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          padding: 8px 16px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+        .offline-icon { font-size: 13px; }
+        .offline-retry {
+          margin-left: auto;
+          background: transparent;
+          border: 1px solid #F8717166;
+          color: #FCA5A5;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          padding: 3px 10px;
+          border-radius: 3px;
+          cursor: pointer;
+        }
+        .offline-retry:hover { background: #F8717122; }
       `}</style>
+
+      {backendOnline === false && (
+        <div className="offline-banner">
+          <span className="offline-icon">&#9888;</span>
+          <span>Cannot reach backend at {API_BASE} — is the server running?</span>
+          <button
+            type="button"
+            className="offline-retry"
+            onClick={() => {
+              setBackendOnline(null);
+              checkBackendHealth();
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="shell">
         {/* SIDEBAR */}
         <aside className="sidebar">
           <div className="sb-brand">
-            <span className="sb-brand-name">orchestrator</span>
-            <span className="sb-brand-ver">v0.4</span>
+            <span className="sb-brand-name">VULCAN FORGE</span>
+            <span className="sb-brand-ver">v1.0</span>
           </div>
 
           <div className="sb-input">
@@ -906,46 +1583,227 @@ export default function App() {
               value={repoUrl}
               onChange={e => setRepoUrl(e.target.value)}
             />
-            <span className="repo-hint">public repos only · leave blank for demo workspace</span>
             {formErr && <div className="sb-err">{formErr}</div>}
-            <button className="sb-submit" onClick={submitTask} disabled={!goal.trim()||submitting}>
-              {submitting ? "Submitting…" : "Run task"}
+            <button
+              className="sb-submit"
+              onClick={submitTask}
+              disabled={!goal.trim() || submitting || backendOnline === false}
+            >
+              {backendOnline === false                ? "Backend offline"
+                : submitting
+                  ? "Submitting…"
+                  : "Run task"}
             </button>
+            <div className="provider-indicator">
+              <span
+                className="provider-dot"
+                style={{ background: providerReady ? "#4ADE80" : "#F87171" }}
+              />
+              <span className="provider-name">{providerIndicatorLabel}</span>
+            </div>
           </div>
 
           <div className="sb-main">
-            <div className="sb-list">
-              {tasks.length===0 && <div className="no-tasks">No tasks yet</div>}
-              {tasks.map(t => {
-                const sc = statusColor(t.status);
-                const repoLabel = repoDisplayLabel(t.repo_url);
-                return (
-                  <button
-                    key={t.id}
-                    className={`task-item ${t.id===selectedId?"sel":""}`}
-                    onClick={() => { setSelectedId(t.id); setTab("log"); }}
-                  >
-                    <div className="task-goal">{t.goal || "(no goal)"}</div>
-                    <div className="task-meta">
-                      <span className={`tdot ${t.status==="running"?"tdot-running":""}`} style={{ background:sc }} />
-                      <span style={{ color:sc }}>{t.status}</span>
-                      <span style={{ marginLeft:"auto" }}>{t.id?.slice(0,7)}</span>
-                    </div>
-                    {repoLabel && (
-                      <div className="task-repo" title={t.repo_url}>{repoLabel}</div>
-                    )}
+            {showSettings ? (
+              <div className="settings-panel">
+                <div className="settings-hdr">
+                  <button className="settings-back" onClick={() => setShowSettings(false)}>
+                    ← Back
                   </button>
-                );
-              })}
-            </div>
-            <button
-              type="button"
-              className="load-history-btn"
-              onClick={loadHistory}
-              disabled={historyLoaded}
-            >
-              {historyLoaded ? "History loaded" : "Load history"}
-            </button>
+                  <span className="settings-title">Settings</span>
+                </div>
+
+                <div className="settings-body">
+                  <div className="settings-toggle-row">
+                    <label className="settings-toggle-label">
+                      <input
+                        type="checkbox"
+                        checked={settings.useServerDefault}
+                        onChange={e => saveSettings({
+                          ...settings,
+                          useServerDefault: e.target.checked,
+                        })}
+                      />
+                      <span>Use server default API key</span>
+                    </label>
+                    <p className="settings-hint">
+                      {settings.useServerDefault
+                        ? "Using the server's configured Groq key"
+                        : "Your key is sent directly to the provider — never stored on the server"}
+                    </p>
+                  </div>
+
+                  {!settings.useServerDefault && (
+                    <div className="settings-fields">
+                      <div className="settings-field">
+                        <label className="settings-label">Provider name</label>
+                        <input
+                          className="settings-input"
+                          placeholder="e.g. Groq, OpenAI, DeepSeek"
+                          value={settings.providerName}
+                          onChange={e => saveSettings({
+                            ...settings,
+                            providerName: e.target.value,
+                          })}
+                        />
+                      </div>
+
+                      <div className="settings-field">
+                        <label className="settings-label">Model</label>
+                        <input
+                          className="settings-input"
+                          placeholder="e.g. llama-3.3-70b-versatile, gpt-4o, claude-opus-4-5"
+                          value={settings.modelName}
+                          onChange={e => saveSettings({
+                            ...settings,
+                            modelName: e.target.value,
+                          })}
+                        />
+                      </div>
+
+                      <div className="settings-field">
+                        <label className="settings-label">API Key</label>
+                        <input
+                          className="settings-input settings-input-secret"
+                          type="password"
+                          placeholder="sk-..."
+                          value={settings.apiKey}
+                          onChange={e => saveSettings({
+                            ...settings,
+                            apiKey: e.target.value,
+                          })}
+                          autoComplete="off"
+                        />
+                      </div>
+
+                      <div className="settings-field">
+                        <label className="settings-label">
+                          Base URL
+                          <span className="settings-optional"> (optional)</span>
+                        </label>
+                        <input
+                          className="settings-input"
+                          placeholder="https://api.groq.com/openai/v1"
+                          value={settings.baseUrl}
+                          onChange={e => saveSettings({
+                            ...settings,
+                            baseUrl: e.target.value,
+                          })}
+                        />
+                        <p className="settings-hint">
+                          Leave blank for Groq. Any OpenAI-compatible endpoint works.
+                        </p>
+                      </div>
+
+                      <div className="settings-field">
+                        <label className="settings-label">Quick fill</label>
+                        <div className="settings-quickfill">
+                          {[
+                            {
+                              name: "Groq",
+                              baseUrl: "https://api.groq.com/openai/v1",
+                              model: "llama-3.3-70b-versatile",
+                            },
+                            {
+                              name: "OpenRouter",
+                              baseUrl: "https://openrouter.ai/api/v1",
+                              model: "qwen/qwen3-coder:free",
+                            },
+                            {
+                              name: "OpenAI",
+                              baseUrl: "https://api.openai.com/v1",
+                              model: "gpt-4o",
+                            },
+                            {
+                              name: "DeepSeek",
+                              baseUrl: "https://api.deepseek.com/v1",
+                              model: "deepseek-chat",
+                            },
+                          ].map((provider) => (
+                            <button
+                              key={provider.name}
+                              type="button"
+                              className="settings-quickfill-btn"
+                              onClick={() => saveSettings({
+                                ...settings,
+                                providerName: provider.name,
+                                baseUrl: provider.baseUrl,
+                                modelName: provider.model,
+                              })}
+                            >
+                              {provider.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="settings-active">
+                    <span
+                      className="settings-active-dot"
+                      style={{ background: providerReady ? "#4ADE80" : "#F87171" }}
+                    />
+                    <span className="settings-active-label">{settingsActiveLabel}</span>
+                  </div>
+
+                  {!settings.useServerDefault && (
+                    <button className="settings-clear" onClick={resetSettings}>
+                      Clear & use server default
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="sb-list">
+                  {tasks.length===0 && <div className="no-tasks">No tasks yet</div>}
+                  {tasks.map(t => {
+                    const sc = statusColor(t.status);
+                    const repoLabel = repoDisplayLabel(t.repo_url);
+                    return (
+                      <button
+                        key={t.id}
+                        className={`task-item ${t.id===selectedId?"sel":""}`}
+                        onClick={() => { setSelectedId(t.id); setTab("log"); }}
+                      >
+                        <div className="task-goal">{t.goal || "(no goal)"}</div>
+                        <div className="task-meta">
+                          <span className={`tdot ${t.status==="running"?"tdot-running":""}`} style={{ background:sc }} />
+                          <span style={{ color:sc }}>{t.status}</span>
+                          <span style={{ marginLeft:"auto" }}>{t.id?.slice(0,7)}</span>
+                        </div>
+                        {repoLabel && (
+                          <div className="task-repo" title={t.repo_url}>{repoLabel}</div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                {!historyLoaded && (
+                  <button
+                    type="button"
+                    className="load-history-btn"
+                    onClick={loadHistory}
+                    disabled={historyLoading || backendOnline === false}
+                  >
+                    {historyLoading ? "Loading history…" : "Load history"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="settings-gear-btn"
+                  onClick={() => setShowSettings(true)}
+                  title="Settings"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                  </svg>
+                  <span>Settings</span>
+                </button>
+              </>
+            )}
           </div>
         </aside>
 
@@ -965,11 +1823,6 @@ export default function App() {
                   <span className="hdr-pulse" style={{ background:statusColor("running"), animation:"pulse 1.2s infinite" }} />
                 )}
                 <span className="task-hdr-goal">{selected.goal || "(no goal)"}</span>
-                {(selected.status === "running" || selected.status === "pending") && (
-                  <button type="button" className="btn-kill btn-fallback" onClick={killTask}>
-                    Kill task
-                  </button>
-                )}
                 <span
                   className="status-pill"
                   style={{
@@ -980,6 +1833,15 @@ export default function App() {
                 >
                   {selected.status.replace(/_/g," ")}
                 </span>
+                {(Number(selected.total_tokens_used || 0) > 0 || Number(selected.total_prompt_tokens || 0) > 0) && (
+                  <div className={`token-counter${selected.status === "running" ? " ticking" : ""}`}>
+                    <span className="token-icon">⬡</span>
+                    <span className="token-val">
+                      {(Number(selected.total_tokens_used || 0)).toLocaleString()}
+                    </span>
+                    <span className="token-lbl">tok</span>
+                  </div>
+                )}
               </div>
 
               {selected.status==="awaiting_approval" && (
@@ -1018,8 +1880,7 @@ export default function App() {
                     onClick={() => setTab(t)}
                     disabled={t!=="log" && !diffAvail}
                   >
-                    {t==="log" ? "Log" : t==="diff" ? "Diff" : "Review"}
-                    {t!=="log" && !diffAvail ? " (pending)" : ""}
+                    {t==="log" ? "TRACE" : t==="diff" ? "DIFF" : "REVIEW"}
                   </button>
                 ))}
               </div>
@@ -1040,7 +1901,7 @@ export default function App() {
                       </div>
                     )}
                     {selected.status==="killed" && (
-                      <div className="empty-msg" style={{ margin: "12px 16px", color: "#E06C75" }}>
+                      <div className="empty-msg" style={{ margin: "12px 16px", color: "#F87171" }}>
                         Task terminated by user.
                       </div>
                     )}
@@ -1067,7 +1928,7 @@ export default function App() {
                       />
                       <button className="cmd-send" onClick={runSlashCommand}>Run</button>
                     </div>
-                    <div className="cmd-hint">Type / for commands</div>
+                    <div className="cmd-hint">{"/approve · /reject <reason> · /stop · /retry · /status"}</div>
                   </div>
                 )}
 
@@ -1085,7 +1946,7 @@ export default function App() {
                     {!diffData?.reviewer_feedback?.length
                       ? <div className="empty-msg">No review cycles — reviewer approved on first pass.</div>
                       : diffData.reviewer_feedback.map((fb,i) => {
-                          const vc = fb.verdict==="approved"?"#3DD68C":fb.verdict==="needs_changes"?"#E5C07B":"#E06C75";
+                          const vc = fb.verdict==="approved"?"#4ADE80":fb.verdict==="needs_changes"?"#FBBF24":"#F87171";
                           return (
                             <div key={i} className="rcard">
                               <div className="rcard-hdr">

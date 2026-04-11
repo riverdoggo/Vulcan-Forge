@@ -95,7 +95,7 @@ def main() -> None:
     fe_env["BROWSER"] = "none"
     fe_flags = creationflags
     frontend = subprocess.Popen(
-        [npm, "start"],
+        [npm, "run", "dev"],
         cwd=str(FRONTEND_DIR),
         env=fe_env,
         shell=False,

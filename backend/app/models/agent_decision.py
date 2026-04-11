@@ -14,7 +14,10 @@ class AgentDecision(BaseModel):
     )
     tool: str | None = Field(default=None, description="Tool name from the available tools list")
     input: str | None = Field(default=None, description="Argument for the tool")
-    content: str | None = Field(default=None, description="Full file content (only for write_file)")
+    content: str | None = Field(
+        default=None,
+        description="Primary: full file body for write_file. Fallback: unified diff text only if tool is apply_patch (avoid unless necessary).",
+    )
     done: bool = Field(default=False, description="Whether the agent is finished")
 
     @classmethod

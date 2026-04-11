@@ -1,6 +1,7 @@
 import re
 from typing import Any
 
+from app.memory.compression import strip_pytest_output
 from app.models.tool_result import ToolResult
 from app.tools.docker_terminal import run_in_container_argv
 
@@ -57,6 +58,25 @@ def _summarize_pytest_failures(output: str) -> str:
     return "Failing tests:\n\n" + "\n\n".join(blocks)
 
 
+def failed_test_names_from_pytest_output(output: str) -> list[str]:
+    """Collect failing test identifiers from pytest or stripped FAIL: lines."""
+    names: list[str] = []
+    if not output:
+        return names
+    for m in _FAILED_LINE.finditer(output):
+        name = m.group("name") or m.group("loc")
+        if name and name not in names:
+            names.append(name)
+    for line in output.splitlines():
+        s = line.strip()
+        if s.startswith("FAIL:"):
+            rest = s[5:].strip()
+            seg = rest.split(" - ", 1)[0].strip()
+            if seg and seg not in names:
+                names.append(seg)
+    return names
+
+
 def run_tests(container: str, path: str | None = None) -> dict[str, Any]:
     """Run pytest in the workspace container. Merges stderr into stdout so pytest errors are visible."""
     argv = ["python", "-m", "pytest", "--tb=short", "-q"]
@@ -73,9 +93,10 @@ def run_tests(container: str, path: str | None = None) -> dict[str, Any]:
         combined = ""
 
     failure_summary = _summarize_pytest_failures(combined)
+    compact_stdout = strip_pytest_output(combined)
     result = ToolResult.from_subprocess(
         returncode=raw.get("exit_code", -1),
-        stdout=combined,
+        stdout=compact_stdout,
         stderr="",
     ).to_dict()
     if failure_summary:

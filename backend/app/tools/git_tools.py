@@ -26,6 +26,22 @@ def git_diff(container: str, path: str | None = None) -> dict[str, Any]:
     stage = _stage_workspace_sanitized(container)
     if stage.get("exit_code") != 0:
         return stage
+    status_res = run_in_container_argv(container, ["git", "status", "--porcelain"])
+    if status_res.get("exit_code") != 0:
+        return status_res
+    if not (status_res.get("stdout") or "").strip():
+        last_commit = run_in_container_argv(container, ["git", "log", "--oneline", "-1"])
+        last_commit_line = (last_commit.get("stdout") or "").strip()
+        return {
+            "status": "success",
+            "stdout": (
+                "No uncommitted changes found. "
+                + (f"Last commit: {last_commit_line}\n" if last_commit_line else "")
+                + "Changes may have already been committed in a previous cycle."
+            ),
+            "stderr": "",
+            "exit_code": 0,
+        }
     return run_in_container_argv(container, ["git", "diff", "--cached"])
 
 
