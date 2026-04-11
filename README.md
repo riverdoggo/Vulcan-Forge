@@ -15,7 +15,6 @@ All inside a Docker sandbox. Bring your own API key or use the server default.
 
 > 9 steps · 4 bugs fixed · 23/23 tests passing · reviewer approved at 0.95 confidence · auto-committed
 
-[Add demo GIF or video here]
 
 ---
 
