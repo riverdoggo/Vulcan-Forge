@@ -13,9 +13,11 @@ All inside a Docker sandbox. Bring your own API key or use the server default.
 
 ## Demo
 
-> 9 steps · 4 bugs fixed · 23/23 tests passing · reviewer approved at 0.95 confidence · auto-committed
+> Placeholder: Demo GIF and run metrics will be updated after the next recorded run.
 
+![Vulcan Forge solving a bug](vulcan_forge_demo.gif)
 
+*Demo placeholder: Vulcan Forge run preview will appear here.*
 ---
 
 ## How it works
@@ -36,7 +38,7 @@ All inside a Docker sandbox. Bring your own API key or use the server default.
 ```mermaid
 flowchart TD
     A[User - POST /tasks] --> B[FastAPI]
-    B --> C[Orchestrator]
+    B --> C[Vulcan Forge Runtime]
     C --> D[Workspace Manager]
     D --> E[Docker Sandbox]
     E --> F[Agent Loop]
@@ -213,8 +215,6 @@ GET  /health             — health check
 | Phase 10 | Provider-agnostic settings — custom API key, model, base URL per task | ✅ Complete |
 | Phase 11 | Production hardening — auth, rate limiting, sanitization, structured logging, Docker Compose, timeout, cleanup | ✅ Complete |
 | Phase 12 | Azure deployment — VM, Nginx, auto-restart, GitHub Actions CI/CD | ✅ Complete |
-| Phase 13 | SWE-bench Lite evaluation | 🔜 Next |
-| Phase 14 | GitHub Issue integration — read issue, write fix, open PR | 🔜 Planned |
 
 ---
 

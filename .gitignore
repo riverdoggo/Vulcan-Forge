@@ -31,6 +31,8 @@ replays/
 logs/
 *.log
 logs/*.log
+*.stdout.log
+*.stderr.log
 orchestrator.db
 
 # Frontend

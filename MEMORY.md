@@ -1,4 +1,10 @@
 ## Lessons
+- [2026-04-14] Carefully review the logic of financial transactions to ensure accuracy and consistency.
+
+- [2026-04-14] Carefully review arithmetic operations and dictionary keys to prevent similar bugs in the future.
+
+- [2026-04-14] When fixing bugs, it's essential to review the entire code path to ensure all related issues are addressed, as seen in the corrections to withdrawal, transaction count, and total withdrawn amount calculations.
+
 - [2026-04-10] Carefully review method implementations to ensure they match the intended behavior.
 
 - [2026-04-07] Correctly identifying and fixing off-by-one errors and incorrect keys in data structures is crucial for maintaining data integrity.
