@@ -6,8 +6,8 @@ const API_BASE =
     ? `${window.location.origin}${_viteApi.replace(/\/$/, "")}`
     : _viteApi.replace(/\/$/, "");
 
-const API_KEY = import.meta.env.VITE_API_KEY || "";
 const DEFAULT_SETTINGS = {
+  serverApiKey: "",
   providerName: "",
   modelName: "",
   apiKey: "",
@@ -17,7 +17,6 @@ const DEFAULT_SETTINGS = {
 
 const authFetch = (url, options = {}) => {
   const headers = { ...(options.headers || {}) };
-  if (API_KEY) headers["X-API-Key"] = API_KEY;
   if (options.body != null && headers["Content-Type"] == null) {
     headers["Content-Type"] = "application/json";
   }
@@ -279,7 +278,8 @@ export default function App() {
 
   const buildTaskHeaders = useCallback(() => {
     const headers = { "Content-Type": "application/json" };
-    if (API_KEY) headers["X-API-Key"] = API_KEY;
+    const serverApiKey = (settings.serverApiKey || "").trim();
+    if (serverApiKey) headers["X-API-Key"] = serverApiKey;
 
     const apiKey = (settings.apiKey || "").trim();
     const modelName = (settings.modelName || "").trim();
@@ -326,7 +326,10 @@ export default function App() {
 
   const fetchTasks = useCallback(async () => {
     try {
-      const r = await fetch(`${API_BASE}/tasks`);
+      const headers = {};
+      const serverApiKey = (settings.serverApiKey || "").trim();
+      if (serverApiKey) headers["X-API-Key"] = serverApiKey;
+      const r = await fetch(`${API_BASE}/tasks`, { headers });
       if (!r.ok) return;
       const data = await r.json();
       const sessionList = Array.isArray(data) ? data : [];
@@ -347,7 +350,7 @@ export default function App() {
         });
       });
     } catch {}
-  }, [historyLoaded]);
+  }, [historyLoaded, settings.serverApiKey]);
 
   useEffect(() => {
     void fetchTasks();
@@ -360,7 +363,10 @@ export default function App() {
     historyFetchLock.current = true;
     setHistoryLoading(true);
     try {
-      const r = await fetch(`${API_BASE}/tasks/history`);
+      const headers = {};
+      const serverApiKey = (settings.serverApiKey || "").trim();
+      if (serverApiKey) headers["X-API-Key"] = serverApiKey;
+      const r = await fetch(`${API_BASE}/tasks/history`, { headers });
       if (!r.ok) return;
       const data = await r.json();
       const list = Array.isArray(data) ? data : [];
@@ -386,11 +392,14 @@ export default function App() {
   const fetchLogs = useCallback(async (id) => {
     if (!id) return;
     try {
-      const r = await fetch(`${API_BASE}/tasks/${id}/logs`);
+      const headers = {};
+      const serverApiKey = (settings.serverApiKey || "").trim();
+      if (serverApiKey) headers["X-API-Key"] = serverApiKey;
+      const r = await fetch(`${API_BASE}/tasks/${id}/logs`, { headers });
       if (!r.ok) return;
       setLogs(await r.json());
     } catch {}
-  }, []);
+  }, [settings.serverApiKey]);
 
   useEffect(() => {
     clearInterval(logPollRef.current);
@@ -403,7 +412,10 @@ export default function App() {
     if (selected?.status === "running") {
       const supportsSSE = typeof window !== "undefined" && "EventSource" in window;
       if (supportsSSE) {
-        const es = new EventSource(`${API_BASE}/tasks/${selectedId}/stream`);
+        const streamUrl = new URL(`${API_BASE}/tasks/${selectedId}/stream`);
+        const serverApiKey = (settings.serverApiKey || "").trim();
+        if (serverApiKey) streamUrl.searchParams.set("api_key", serverApiKey);
+        const es = new EventSource(streamUrl.toString());
         eventSourceRef.current = es;
 
         es.onmessage = (event) => {
@@ -437,7 +449,7 @@ export default function App() {
         eventSourceRef.current = null;
       }
     };
-  }, [selectedId, selected?.status, fetchLogs, fetchTasks]);
+  }, [selectedId, selected?.status, fetchLogs, fetchTasks, settings.serverApiKey]);
 
   useEffect(() => {
     if (selected?.status === "running") {
@@ -450,11 +462,14 @@ export default function App() {
     if (diffFor === selected.id) return;
     (async () => {
       try {
-        const r = await fetch(`${API_BASE}/tasks/${selected.id}/diff`);
+        const headers = {};
+        const serverApiKey = (settings.serverApiKey || "").trim();
+        if (serverApiKey) headers["X-API-Key"] = serverApiKey;
+        const r = await fetch(`${API_BASE}/tasks/${selected.id}/diff`, { headers });
         if (r.ok) { setDiffData(await r.json()); setDiffFor(selected.id); }
       } catch {}
     })();
-  }, [selected?.id, selected?.status, diffFor]);
+  }, [selected?.id, selected?.status, diffFor, settings.serverApiKey]);
 
   const submitTask = async () => {
     const g = goal.trim();
@@ -1614,6 +1629,24 @@ export default function App() {
                 </div>
 
                 <div className="settings-body">
+                  <div className="settings-field">
+                    <label className="settings-label">Server API key</label>
+                    <input
+                      className="settings-input settings-input-secret"
+                      type="password"
+                      placeholder="X-API-Key for protected endpoints"
+                      value={settings.serverApiKey}
+                      onChange={e => saveSettings({
+                        ...settings,
+                        serverApiKey: e.target.value,
+                      })}
+                      autoComplete="off"
+                    />
+                    <p className="settings-hint">
+                      Stored in browser local storage. Not embedded in frontend build output.
+                    </p>
+                  </div>
+
                   <div className="settings-toggle-row">
                     <label className="settings-toggle-label">
                       <input

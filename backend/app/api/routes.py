@@ -89,18 +89,18 @@ def create_task(
     return created
 
 
-@router.get("/tasks")
+@router.get("/tasks", dependencies=[Depends(require_api_key)])
 @limiter.limit("120/minute")
 def list_tasks(request: Request) -> list[Task]:
     return orc.list_tasks()
 
 
-@router.get("/tasks/history")
+@router.get("/tasks/history", dependencies=[Depends(require_api_key)])
 def get_task_history():
     return load_all_tasks()
 
 
-@router.get("/tasks/{task_id}/logs")
+@router.get("/tasks/{task_id}/logs", dependencies=[Depends(require_api_key)])
 def get_logs(task_id: str):
     try:
         return orc.get_logs(task_id)
@@ -111,7 +111,7 @@ def get_logs(task_id: str):
         )
 
 
-@router.get("/tasks/{task_id}")
+@router.get("/tasks/{task_id}", dependencies=[Depends(require_api_key)])
 def get_task(task_id: str):
     tasks = {t.id: t for t in orc.tasks.values()}
     if task_id not in tasks:
@@ -119,7 +119,7 @@ def get_task(task_id: str):
     return tasks[task_id]
 
 
-@router.get("/tasks/{task_id}/transcript")
+@router.get("/tasks/{task_id}/transcript", dependencies=[Depends(require_api_key)])
 def get_task_transcript(task_id: str):
     try:
         transcript = load_task_transcript(task_id)
@@ -136,7 +136,7 @@ def _stream_status(task_status: str) -> str:
     return task_status
 
 
-@router.get("/tasks/{task_id}/stream")
+@router.get("/tasks/{task_id}/stream", dependencies=[Depends(require_api_key)])
 async def stream_task(task_id: str, request: Request):
     try:
         load_task_transcript(task_id)
@@ -186,7 +186,7 @@ async def stream_task(task_id: str, request: Request):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@router.get("/tasks/{task_id}/diff")
+@router.get("/tasks/{task_id}/diff", dependencies=[Depends(require_api_key)])
 def get_task_diff(task_id: str):
     tasks = {t.id: t for t in orc.tasks.values()}
     if task_id not in tasks:

@@ -1,0 +1,26 @@
+name: Deploy to Azure VM
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VM_IP }}
+          username: azureuser
+          key: ${{ secrets.SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd ~/Vulcan-Forge
+            git fetch origin main
+            git reset --hard origin/main
+            docker compose up --build -d
+            curl -fsS https://vulcan-forge.northcentralus.cloudapp.azure.com/api/health
+            echo "Deployed at $(date -u)"

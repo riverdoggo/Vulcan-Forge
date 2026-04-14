@@ -220,7 +220,7 @@ GET  /health             — health check
 
 ## Deployment
 
-Live at: [your Azure URL here]
+Live at: [https://vulcan-forge.northcentralus.cloudapp.azure.com](https://vulcan-forge.northcentralus.cloudapp.azure.com)
 
 Deployed on Azure VM (Standard_B2s, Ubuntu 22.04) behind Nginx.
 See [deployment guide](docs/DEPLOYMENT.md) for full Azure setup instructions.
