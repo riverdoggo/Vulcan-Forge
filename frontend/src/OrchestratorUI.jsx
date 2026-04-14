@@ -12,7 +12,6 @@ const DEFAULT_SETTINGS = {
   modelName: "",
   apiKey: "",
   baseUrl: "",
-  useServerDefault: true,
 };
 
 const authFetch = (url, options = {}) => {
@@ -253,11 +252,6 @@ export default function App() {
   const historyFetchLock = useRef(false);
   const [backendOnline, setBackendOnline] = useState(null);
   const [apiAuthRequired, setApiAuthRequired] = useState(false);
-  const [apiKeyDraft, setApiKeyDraft] = useState("");
-
-  useEffect(() => {
-    setApiKeyDraft(settings.serverApiKey || "");
-  }, [settings.serverApiKey]);
 
   const saveSettings = useCallback((newSettings) => {
     const merged = { ...DEFAULT_SETTINGS, ...newSettings };
@@ -270,17 +264,13 @@ export default function App() {
     localStorage.removeItem("vulcan_settings");
   }, []);
 
-  const providerReady = settings.useServerDefault || Boolean((settings.apiKey || "").trim());
-  const providerIndicatorLabel = settings.useServerDefault
-    ? "Server default"
-    : (settings.apiKey || "").trim()
-      ? `${settings.providerName || "Custom"} · ${settings.modelName || "?"}`
-      : "No provider configured";
-  const settingsActiveLabel = settings.useServerDefault
-    ? "Server default"
-    : (settings.apiKey || "").trim()
-      ? `${settings.providerName || "Custom"} · ${settings.modelName || "unknown model"}`
-      : "No key configured";
+  const providerReady = true;
+  const providerIndicatorLabel = (settings.apiKey || "").trim()
+    ? `${settings.providerName || "Custom"} · ${settings.modelName || "?"}`
+    : "Server-managed provider";
+  const settingsActiveLabel = (settings.apiKey || "").trim()
+    ? `${settings.providerName || "Custom"} · ${settings.modelName || "unknown model"}`
+    : "Server-managed provider";
 
   const buildTaskHeaders = useCallback(() => {
     const headers = { "Content-Type": "application/json" };
@@ -290,7 +280,7 @@ export default function App() {
     const apiKey = (settings.apiKey || "").trim();
     const modelName = (settings.modelName || "").trim();
     const baseUrl = (settings.baseUrl || "").trim();
-    if (!settings.useServerDefault && apiKey) {
+    if (apiKey) {
       headers["X-LLM-Key"] = apiKey;
       if (modelName) headers["X-LLM-Model"] = modelName;
       if (baseUrl) headers["X-LLM-Base-URL"] = baseUrl;
@@ -331,9 +321,11 @@ export default function App() {
   }, [checkBackendHealth]);
 
   const fetchTasks = useCallback(async () => {
+    const serverApiKey = (settings.serverApiKey || "").trim();
+    // Prevent noisy unauthorized polling when auth is required but no key is set.
+    if (apiAuthRequired && !serverApiKey) return;
     try {
       const headers = {};
-      const serverApiKey = (settings.serverApiKey || "").trim();
       if (serverApiKey) headers["X-API-Key"] = serverApiKey;
       const r = await fetch(`${API_BASE}/tasks`, { headers });
       if (!r.ok) {
@@ -362,13 +354,30 @@ export default function App() {
         });
       });
     } catch {}
-  }, [historyLoaded, settings.serverApiKey]);
+  }, [apiAuthRequired, historyLoaded, settings.serverApiKey]);
 
   useEffect(() => {
+    const serverApiKey = (settings.serverApiKey || "").trim();
+    if (apiAuthRequired && !serverApiKey) return;
     void fetchTasks();
     const id = setInterval(fetchTasks, 2500);
     return () => clearInterval(id);
-  }, [fetchTasks]);
+  }, [apiAuthRequired, fetchTasks, settings.serverApiKey]);
+
+  const saveCustomApiConfig = useCallback(() => {
+    saveSettings({
+      ...settings,
+      apiKey: (settings.apiKey || "").trim(),
+      baseUrl: (settings.baseUrl || "").trim(),
+      modelName: (settings.modelName || "").trim(),
+      providerName: (settings.providerName || "").trim(),
+    });
+    setApiAuthRequired(false);
+    setFormErr("");
+    setBackendOnline(null);
+    checkBackendHealth();
+    fetchTasks();
+  }, [saveSettings, settings, checkBackendHealth, fetchTasks]);
 
   const loadHistory = async () => {
     if (historyLoaded || historyFetchLock.current) return;
@@ -509,7 +518,7 @@ export default function App() {
 
         if (r.status === 401) {
           setApiAuthRequired(true);
-          throw new Error("Unauthorized — set the server API key in Settings.");
+          throw new Error("Unauthorized — set Server API key in Settings.");
         }
         if (r.status === 400) {
           throw new Error(detail || "Invalid task request.");
@@ -797,49 +806,6 @@ export default function App() {
           box-shadow: 0 0 0 2px #92400E33;
         }
         .repo-input::placeholder { color: var(--t3); }
-        .apikey-row {
-          display: flex;
-          gap: 6px;
-          margin-top: 6px;
-          align-items: center;
-        }
-        .apikey-input {
-          flex: 1;
-          background: var(--bg0);
-          border: 1px solid var(--bd);
-          border-radius: 4px;
-          padding: 7px 12px;
-          color: var(--t1);
-          font-family: var(--font-mono);
-          font-size: 11px;
-          transition: border-color 0.15s, box-shadow 0.15s;
-        }
-        .apikey-input:focus {
-          outline: none;
-          border-color: var(--acc);
-          box-shadow: 0 0 0 2px #92400E33;
-        }
-        .apikey-save {
-          border: 1px solid var(--bd2);
-          background: var(--bg2);
-          color: var(--t2);
-          font-family: var(--font-mono);
-          font-size: 10px;
-          font-weight: 600;
-          letter-spacing: 0.06em;
-          text-transform: uppercase;
-          border-radius: 4px;
-          padding: 7px 10px;
-          cursor: pointer;
-          transition: border-color 0.15s, color 0.15s;
-        }
-        .apikey-save:hover { border-color: var(--acc); color: var(--acc); }
-        .apikey-hint {
-          margin-top: 5px;
-          color: var(--t3);
-          font-family: var(--font-mono);
-          font-size: 9px;
-        }
         .sb-submit {
           margin-top: 8px;
           width: 100%;
@@ -966,6 +932,33 @@ export default function App() {
           display: flex;
           flex-direction: column;
           gap: 5px;
+        }
+        .settings-api-row {
+          display: flex;
+          gap: 6px;
+          align-items: center;
+        }
+        .settings-api-row .settings-input {
+          flex: 1;
+        }
+        .settings-api-save {
+          border: 1px solid var(--bd2);
+          background: var(--bg2);
+          color: var(--t2);
+          font-family: var(--font-mono);
+          font-size: 9px;
+          font-weight: 600;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          border-radius: 3px;
+          padding: 6px 9px;
+          cursor: pointer;
+          white-space: nowrap;
+          transition: border-color 0.15s, color 0.15s;
+        }
+        .settings-api-save:hover {
+          border-color: var(--acc);
+          color: var(--acc);
         }
         .settings-label {
           font-family: var(--font-mono);
@@ -1669,51 +1662,6 @@ export default function App() {
               value={repoUrl}
               onChange={e => setRepoUrl(e.target.value)}
             />
-            <div className="apikey-row">
-              <input
-                type="password"
-                className="apikey-input"
-                placeholder="Server API key (required for protected endpoints)"
-                value={apiKeyDraft}
-                onChange={e => {
-                  const next = e.target.value;
-                  setApiKeyDraft(next);
-                  if (next.trim()) {
-                    setApiAuthRequired(false);
-                    setFormErr("");
-                  }
-                }}
-                onKeyDown={e => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    const next = apiKeyDraft.trim();
-                    saveSettings({ ...settings, serverApiKey: next });
-                    setApiAuthRequired(false);
-                    setFormErr("");
-                    setBackendOnline(null);
-                    checkBackendHealth();
-                    fetchTasks();
-                  }
-                }}
-                autoComplete="off"
-              />
-              <button
-                type="button"
-                className="apikey-save"
-                onClick={() => {
-                  const next = apiKeyDraft.trim();
-                  saveSettings({ ...settings, serverApiKey: next });
-                  setApiAuthRequired(false);
-                  setFormErr("");
-                  setBackendOnline(null);
-                  checkBackendHealth();
-                  fetchTasks();
-                }}
-              >
-                Save key
-              </button>
-            </div>
-            <div className="apikey-hint">Saved only in this browser session storage.</div>
             {formErr && <div className="sb-err">{formErr}</div>}
             <button
               className="sb-submit"
@@ -1759,31 +1707,17 @@ export default function App() {
                       autoComplete="off"
                     />
                     <p className="settings-hint">
-                      Stored in browser local storage. Not embedded in frontend build output.
+                      Required for protected endpoints (`/tasks`, logs, approvals). Stored in browser local storage.
                     </p>
                   </div>
 
                   <div className="settings-toggle-row">
-                    <label className="settings-toggle-label">
-                      <input
-                        type="checkbox"
-                        checked={settings.useServerDefault}
-                        onChange={e => saveSettings({
-                          ...settings,
-                          useServerDefault: e.target.checked,
-                        })}
-                      />
-                      <span>Use server default API key</span>
-                    </label>
                     <p className="settings-hint">
-                      {settings.useServerDefault
-                        ? "Using the server's configured Groq key"
-                        : "Your key is sent directly to the provider — never stored on the server"}
+                      Custom provider settings are optional. Leave blank to use the server-managed model/key.
                     </p>
                   </div>
 
-                  {!settings.useServerDefault && (
-                    <div className="settings-fields">
+                  <div className="settings-fields">
                       <div className="settings-field">
                         <label className="settings-label">Provider name</label>
                         <input
@@ -1812,17 +1746,32 @@ export default function App() {
 
                       <div className="settings-field">
                         <label className="settings-label">API Key</label>
-                        <input
-                          className="settings-input settings-input-secret"
-                          type="password"
-                          placeholder="sk-..."
-                          value={settings.apiKey}
-                          onChange={e => saveSettings({
-                            ...settings,
-                            apiKey: e.target.value,
-                          })}
-                          autoComplete="off"
-                        />
+                        <div className="settings-api-row">
+                          <input
+                            className="settings-input settings-input-secret"
+                            type="password"
+                            placeholder="sk-..."
+                            value={settings.apiKey}
+                            onChange={e => saveSettings({
+                              ...settings,
+                              apiKey: e.target.value,
+                            })}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                saveCustomApiConfig();
+                              }
+                            }}
+                            autoComplete="off"
+                          />
+                          <button
+                            type="button"
+                            className="settings-api-save"
+                            onClick={saveCustomApiConfig}
+                          >
+                            Save API
+                          </button>
+                        </div>
                       </div>
 
                       <div className="settings-field">
@@ -1885,8 +1834,7 @@ export default function App() {
                           ))}
                         </div>
                       </div>
-                    </div>
-                  )}
+                  </div>
 
                   <div className="settings-active">
                     <span
@@ -1896,11 +1844,9 @@ export default function App() {
                     <span className="settings-active-label">{settingsActiveLabel}</span>
                   </div>
 
-                  {!settings.useServerDefault && (
-                    <button className="settings-clear" onClick={resetSettings}>
-                      Clear & use server default
-                    </button>
-                  )}
+                  <button className="settings-clear" onClick={resetSettings}>
+                    Clear custom API override
+                  </button>
                 </div>
               </div>
             ) : (
