@@ -342,6 +342,27 @@ def _should_force_run_tests_after_double_write(steps: list[dict[str, Any]]) -> b
     return False
 
 
+def _should_force_run_tests_after_repeated_failed_write(steps: list[dict[str, Any]]) -> bool:
+    """
+    If two consecutive write_file attempts on the same path both failed/rejected,
+    force run_tests to break pointless write loops.
+    """
+    if len(steps) < 2:
+        return False
+    a, b = steps[-2], steps[-1]
+    da, db = a.get("decision") or {}, b.get("decision") or {}
+    ra, rb = a.get("result") or {}, b.get("result") or {}
+    if not isinstance(da, dict) or not isinstance(db, dict) or not isinstance(ra, dict) or not isinstance(rb, dict):
+        return False
+    if da.get("tool") != "write_file" or db.get("tool") != "write_file":
+        return False
+    if not da.get("input") or da.get("input") != db.get("input"):
+        return False
+    a_failed = int(ra.get("exit_code", 0) or 0) != 0 or ra.get("rejected_reason") is not None
+    b_failed = int(rb.get("exit_code", 0) or 0) != 0 or rb.get("rejected_reason") is not None
+    return a_failed and b_failed
+
+
 def _bump_stall_counters(stall: dict[str, Any], step: dict[str, Any]) -> None:
     """Track consecutive read_file per path and list_directory for idle-loop breaks."""
     d = step.get("decision") or {}
@@ -990,6 +1011,7 @@ class AgentLoop:
 
                 stall_override = _stall_override_prompt(stall, last_test_failure_summary)
                 force_run_tests = _should_force_run_tests_after_double_write(steps)
+                force_run_tests_after_failed_write = _should_force_run_tests_after_repeated_failed_write(steps)
                 force_run_command_break = _should_force_after_double_run_command_error(steps)
                 loop_dup = _consecutive_duplicate_tool_input(steps)
                 repeated_read_path = _same_read_file_three_in_five(steps)
@@ -1036,6 +1058,19 @@ class AgentLoop:
                     )
                     decision = AgentDecision(
                         reasoning="Runtime: enforce run_tests after repeated writes on the same path",
+                        tool="run_tests",
+                        input=None,
+                        content=None,
+                        done=False,
+                    )
+                elif force_run_tests_after_failed_write:
+                    runtime_forced_call = True
+                    logger.warning(
+                        "Repeated failed write_file attempts on same path; forcing run_tests to break loop.",
+                        extra={"task_id": task.id},
+                    )
+                    decision = AgentDecision(
+                        reasoning="Runtime: break repeated failed write loop with run_tests",
                         tool="run_tests",
                         input=None,
                         content=None,

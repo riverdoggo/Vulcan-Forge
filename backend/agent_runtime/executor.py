@@ -113,6 +113,14 @@ def get_max_diff_ratio(file_size_bytes: int) -> float:
     return 0.25
 
 
+def allow_full_rewrite_for_small_file(file_size_bytes: int) -> bool:
+    """
+    For very small files, allow complete rewrites.
+    This avoids over-constraining simple fixtures/config files.
+    """
+    return file_size_bytes <= 2500
+
+
 def _compute_line_diff_ratio(old: str, new: str) -> dict[str, Any]:
     old_lines = old.splitlines()
     new_lines = new.splitlines()
@@ -251,28 +259,37 @@ class Executor:
                 )
 
                 if diff_ratio > max_ratio:
-                    logger.warning(
-                        "Full rewrite detected",
-                        extra={"task_id": getattr(task, "id", None), "path": path, "diff_ratio": diff_ratio},
-                    )
-                    guidance = (
-                        "Write rejected: full rewrite detected.\n"
-                        "Your change modified too much of the file.\n"
-                        "Only edit the minimal lines necessary to fix the failing tests.\n"
-                        "Use write_file again with a smaller, targeted change (full file content, but only change what you must).\n"
-                        f"Diff ratio: {diff_ratio:.3f} exceeds limit {max_ratio:.3f} "
-                        f"for a file of this size ({file_size_bytes} bytes)."
-                    )
-                    return ToolResult(
-                        status="error",
-                        stderr="Full rewrite detected",
-                        stdout=guidance,
-                        exit_code=2,
-                        diff_ratio=diff_ratio,
-                        changed_lines=stats["changed_lines"],
-                        total_lines=stats["total_lines"],
-                        rejected_reason="full_rewrite_detected",
-                    ).to_dict()
+                    if allow_full_rewrite_for_small_file(file_size_bytes):
+                        logger.info(
+                            "Allowing full rewrite for small file path=%s bytes=%s diff_ratio=%.3f",
+                            path,
+                            file_size_bytes,
+                            diff_ratio,
+                            extra={"task_id": getattr(task, "id", None)},
+                        )
+                    else:
+                        logger.warning(
+                            "Full rewrite detected",
+                            extra={"task_id": getattr(task, "id", None), "path": path, "diff_ratio": diff_ratio},
+                        )
+                        guidance = (
+                            "Write rejected: full rewrite detected.\n"
+                            "Your change modified too much of the file.\n"
+                            "Only edit the minimal lines necessary to fix the failing tests.\n"
+                            "Use write_file again with a smaller, targeted change (full file content, but only change what you must).\n"
+                            f"Diff ratio: {diff_ratio:.3f} exceeds limit {max_ratio:.3f} "
+                            f"for a file of this size ({file_size_bytes} bytes)."
+                        )
+                        return ToolResult(
+                            status="error",
+                            stderr="Full rewrite detected",
+                            stdout=guidance,
+                            exit_code=2,
+                            diff_ratio=diff_ratio,
+                            changed_lines=stats["changed_lines"],
+                            total_lines=stats["total_lines"],
+                            rejected_reason="full_rewrite_detected",
+                        ).to_dict()
 
                 if not getattr(task, "pre_write_files", None):
                     task.pre_write_files = {}
