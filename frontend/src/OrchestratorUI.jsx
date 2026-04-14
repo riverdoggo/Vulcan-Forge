@@ -1623,7 +1623,7 @@ export default function App() {
       {backendOnline === false && (
         <div className="offline-banner">
           <span className="offline-icon">&#9888;</span>
-          <span>Cannot reach backend at {API_BASE} — is the server running?</span>
+          <span>Service unavailable right now. Please retry in a moment.</span>
           <button
             type="button"
             className="offline-retry"
