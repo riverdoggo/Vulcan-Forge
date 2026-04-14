@@ -252,6 +252,7 @@ export default function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const historyFetchLock = useRef(false);
   const [backendOnline, setBackendOnline] = useState(null);
+  const [apiAuthRequired, setApiAuthRequired] = useState(false);
 
   const saveSettings = useCallback((newSettings) => {
     const merged = { ...DEFAULT_SETTINGS, ...newSettings };
@@ -330,7 +331,13 @@ export default function App() {
       const serverApiKey = (settings.serverApiKey || "").trim();
       if (serverApiKey) headers["X-API-Key"] = serverApiKey;
       const r = await fetch(`${API_BASE}/tasks`, { headers });
-      if (!r.ok) return;
+      if (!r.ok) {
+        if (r.status === 401) {
+          setApiAuthRequired(true);
+        }
+        return;
+      }
+      setApiAuthRequired(false);
       const data = await r.json();
       const sessionList = Array.isArray(data) ? data : [];
       sessionList.sort((a,b) => {
@@ -367,7 +374,13 @@ export default function App() {
       const serverApiKey = (settings.serverApiKey || "").trim();
       if (serverApiKey) headers["X-API-Key"] = serverApiKey;
       const r = await fetch(`${API_BASE}/tasks/history`, { headers });
-      if (!r.ok) return;
+      if (!r.ok) {
+        if (r.status === 401) {
+          setApiAuthRequired(true);
+        }
+        return;
+      }
+      setApiAuthRequired(false);
       const data = await r.json();
       const list = Array.isArray(data) ? data : [];
       setTasks((prev) => {
@@ -481,13 +494,37 @@ export default function App() {
         headers: buildTaskHeaders(),
         body: JSON.stringify({ goal: g, repo_url: repoUrl.trim() }),
       });
-      if (!r.ok) throw new Error();
+      if (!r.ok) {
+        let detail = "";
+        try {
+          const body = await r.json();
+          detail = String(body?.detail || "").trim();
+        } catch {}
+
+        if (r.status === 401) {
+          setApiAuthRequired(true);
+          throw new Error("Unauthorized — set the server API key in Settings.");
+        }
+        if (r.status === 400) {
+          throw new Error(detail || "Invalid task request.");
+        }
+        throw new Error(detail || `API request failed (HTTP ${r.status}).`);
+      }
       const d = await r.json();
+      setBackendOnline(true);
+      setApiAuthRequired(false);
       setGoal(""); setRepoUrl(""); setTab("log");
       await fetchTasks();
       setSelectedId(d.id);
-    } catch {
-      setFormErr("Cannot reach API — is the backend running?");
+    } catch (err) {
+      const msg = String(err?.message || "").trim();
+      // Keep "offline" state for true network failures only.
+      if (msg) {
+        setFormErr(msg);
+      } else {
+        setBackendOnline(false);
+        setFormErr("Cannot reach API — is the backend running?");
+      }
     }
     setSubmitting(false);
   };
@@ -1556,7 +1593,32 @@ export default function App() {
           cursor: pointer;
         }
         .offline-retry:hover { background: #F8717122; }
+
+        .auth-banner {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          z-index: 1001;
+          background: #FBBF2416;
+          border-bottom: 1px solid #FBBF2466;
+          color: #FDE68A;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          padding: 8px 16px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+        .auth-icon { font-size: 13px; }
       `}</style>
+
+      {apiAuthRequired && (
+        <div className="auth-banner">
+          <span className="auth-icon">&#128274;</span>
+          <span>API key required. Open Settings and set your server API key to access protected endpoints.</span>
+        </div>
+      )}
 
       {backendOnline === false && (
         <div className="offline-banner">
