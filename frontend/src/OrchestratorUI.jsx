@@ -253,6 +253,11 @@ export default function App() {
   const historyFetchLock = useRef(false);
   const [backendOnline, setBackendOnline] = useState(null);
   const [apiAuthRequired, setApiAuthRequired] = useState(false);
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
+
+  useEffect(() => {
+    setApiKeyDraft(settings.serverApiKey || "");
+  }, [settings.serverApiKey]);
 
   const saveSettings = useCallback((newSettings) => {
     const merged = { ...DEFAULT_SETTINGS, ...newSettings };
@@ -487,6 +492,7 @@ export default function App() {
   const submitTask = async () => {
     const g = goal.trim();
     if (!g || submitting) return;
+    setApiAuthRequired(false);
     setSubmitting(true); setFormErr("");
     try {
       const r = await fetch(`${API_BASE}/tasks`, {
@@ -791,6 +797,49 @@ export default function App() {
           box-shadow: 0 0 0 2px #92400E33;
         }
         .repo-input::placeholder { color: var(--t3); }
+        .apikey-row {
+          display: flex;
+          gap: 6px;
+          margin-top: 6px;
+          align-items: center;
+        }
+        .apikey-input {
+          flex: 1;
+          background: var(--bg0);
+          border: 1px solid var(--bd);
+          border-radius: 4px;
+          padding: 7px 12px;
+          color: var(--t1);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .apikey-input:focus {
+          outline: none;
+          border-color: var(--acc);
+          box-shadow: 0 0 0 2px #92400E33;
+        }
+        .apikey-save {
+          border: 1px solid var(--bd2);
+          background: var(--bg2);
+          color: var(--t2);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          border-radius: 4px;
+          padding: 7px 10px;
+          cursor: pointer;
+          transition: border-color 0.15s, color 0.15s;
+        }
+        .apikey-save:hover { border-color: var(--acc); color: var(--acc); }
+        .apikey-hint {
+          margin-top: 5px;
+          color: var(--t3);
+          font-family: var(--font-mono);
+          font-size: 9px;
+        }
         .sb-submit {
           margin-top: 8px;
           width: 100%;
@@ -1564,14 +1613,10 @@ export default function App() {
         .cmd-log.error { color: #F87171; }
         .cmd-log.success { color: #4ADE80; }
 
-        .offline-banner {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          z-index: 1000;
+        .status-banner {
           background: #F8717122;
-          border-bottom: 1px solid #F8717166;
+          border: 1px solid #F8717166;
+          border-radius: 4px;
           color: #FCA5A5;
           font-family: var(--font-mono);
           font-size: 11px;
@@ -1579,9 +1624,10 @@ export default function App() {
           display: flex;
           align-items: center;
           gap: 10px;
+          margin: 10px 16px 0;
         }
-        .offline-icon { font-size: 13px; }
-        .offline-retry {
+        .status-icon { font-size: 13px; }
+        .status-retry {
           margin-left: auto;
           background: transparent;
           border: 1px solid #F8717166;
@@ -1592,50 +1638,13 @@ export default function App() {
           border-radius: 3px;
           cursor: pointer;
         }
-        .offline-retry:hover { background: #F8717122; }
-
-        .auth-banner {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          z-index: 1001;
+        .status-retry:hover { background: #F8717122; }
+        .status-banner.auth {
           background: #FBBF2416;
-          border-bottom: 1px solid #FBBF2466;
+          border-color: #FBBF2466;
           color: #FDE68A;
-          font-family: var(--font-mono);
-          font-size: 11px;
-          padding: 8px 16px;
-          display: flex;
-          align-items: center;
-          gap: 10px;
         }
-        .auth-icon { font-size: 13px; }
       `}</style>
-
-      {apiAuthRequired && (
-        <div className="auth-banner">
-          <span className="auth-icon">&#128274;</span>
-          <span>API key required. Open Settings and set your server API key to access protected endpoints.</span>
-        </div>
-      )}
-
-      {backendOnline === false && (
-        <div className="offline-banner">
-          <span className="offline-icon">&#9888;</span>
-          <span>Service unavailable right now. Please retry in a moment.</span>
-          <button
-            type="button"
-            className="offline-retry"
-            onClick={() => {
-              setBackendOnline(null);
-              checkBackendHealth();
-            }}
-          >
-            Retry
-          </button>
-        </div>
-      )}
 
       <div className="shell">
         {/* SIDEBAR */}
@@ -1660,6 +1669,51 @@ export default function App() {
               value={repoUrl}
               onChange={e => setRepoUrl(e.target.value)}
             />
+            <div className="apikey-row">
+              <input
+                type="password"
+                className="apikey-input"
+                placeholder="Server API key (required for protected endpoints)"
+                value={apiKeyDraft}
+                onChange={e => {
+                  const next = e.target.value;
+                  setApiKeyDraft(next);
+                  if (next.trim()) {
+                    setApiAuthRequired(false);
+                    setFormErr("");
+                  }
+                }}
+                onKeyDown={e => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const next = apiKeyDraft.trim();
+                    saveSettings({ ...settings, serverApiKey: next });
+                    setApiAuthRequired(false);
+                    setFormErr("");
+                    setBackendOnline(null);
+                    checkBackendHealth();
+                    fetchTasks();
+                  }
+                }}
+                autoComplete="off"
+              />
+              <button
+                type="button"
+                className="apikey-save"
+                onClick={() => {
+                  const next = apiKeyDraft.trim();
+                  saveSettings({ ...settings, serverApiKey: next });
+                  setApiAuthRequired(false);
+                  setFormErr("");
+                  setBackendOnline(null);
+                  checkBackendHealth();
+                  fetchTasks();
+                }}
+              >
+                Save key
+              </button>
+            </div>
+            <div className="apikey-hint">Saved only in this browser session storage.</div>
             {formErr && <div className="sb-err">{formErr}</div>}
             <button
               className="sb-submit"
@@ -1979,6 +2033,30 @@ export default function App() {
                   </button>
                 ))}
               </div>
+
+              {apiAuthRequired && (
+                <div className="status-banner auth">
+                  <span className="status-icon">&#128274;</span>
+                  <span>API key required. Add it in the left panel and click Save key.</span>
+                </div>
+              )}
+
+              {backendOnline === false && (
+                <div className="status-banner">
+                  <span className="status-icon">&#9888;</span>
+                  <span>Service unavailable right now. Please retry in a moment.</span>
+                  <button
+                    type="button"
+                    className="status-retry"
+                    onClick={() => {
+                      setBackendOnline(null);
+                      checkBackendHealth();
+                    }}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
 
               <div className="panel">
                 {tab==="log" && (
