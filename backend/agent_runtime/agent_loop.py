@@ -323,6 +323,10 @@ def _goal_likely_requires_test_bootstrap(goal: str) -> bool:
     return any(tok in g for tok in test_signals)
 
 
+def _task_no_tests_mode(task_id: str) -> bool:
+    return bool(runtime_state(task_id).get("no_tests_mode", False))
+
+
 def _write_file_step_succeeded(step: dict[str, Any]) -> bool:
     """True only if write_file actually changed the file (not rejected / error)."""
     d = step.get("decision") or {}
@@ -706,6 +710,8 @@ class AgentLoop:
                         or str(rt_result.get("status") or "").strip().lower() == "no_tests_found"
                     )
                 )
+                if str(rt_result.get("status") or "").strip().lower() == "no_tests_found":
+                    runtime_state(task.id)["no_tests_mode"] = True
                 if hasattr(task, "last_test_counts") and counts_after:
                     task.last_test_counts = counts_after
 
@@ -1046,6 +1052,10 @@ class AgentLoop:
                 force_run_tests = _should_force_run_tests_after_double_write(steps)
                 force_run_tests_after_failed_write = _should_force_run_tests_after_repeated_failed_write(steps)
                 force_run_command_break = _should_force_after_double_run_command_error(steps)
+                no_tests_mode = _task_no_tests_mode(task.id)
+                if no_tests_mode:
+                    force_run_tests = False
+                    force_run_tests_after_failed_write = False
                 loop_dup = _consecutive_duplicate_tool_input(steps)
                 repeated_read_path = _same_read_file_three_in_five(steps)
                 if repeated_read_path:
@@ -1298,7 +1308,7 @@ class AgentLoop:
                     task.read_loop_guard_active = False
 
                 chain_rt: AgentDecision | None = None
-                if isinstance(result, dict):
+                if isinstance(result, dict) and not _task_no_tests_mode(task.id):
                     chain_rt = _forced_run_tests_decision_after_write(decision, result)
                     if chain_rt is None:
                         chain_rt = _forced_run_tests_decision_after_apply_patch(decision, result)
