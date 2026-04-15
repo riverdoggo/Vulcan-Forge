@@ -92,6 +92,87 @@ def _mask_api_key(api_key: str) -> str:
     return api_key[-4:] if len(api_key) > 4 else "****"
 
 
+def _is_openrouter_target(llm_override: dict | None) -> bool:
+    base = str((llm_override or {}).get("base_url") or "").lower()
+    return "openrouter" in base
+
+
+def _fallback_to_openrouter_sync(*, prompt: str, timeout: float, task: object | None) -> str:
+    if not OPENROUTER_API_KEY:
+        raise OllamaError(
+            "LLM rate limited and OPENROUTER_API_KEY is not set for fallback (set it in .env)."
+        )
+    logger.warning(
+        "[llm] Primary provider rate limited — falling back to OpenRouter (%s)",
+        OPENROUTER_MODEL,
+    )
+    try:
+        data = _call_provider_sync(
+            prompt=prompt,
+            timeout=timeout,
+            model=OPENROUTER_MODEL,
+            default_api_key=OPENROUTER_API_KEY,
+            default_url=OPENROUTER_URL,
+            default_base_url=OPENROUTER_BASE_URL,
+            provider_name="OpenRouter",
+        )
+    except RequestsHTTPError as e2:
+        resp2 = e2.response
+        raise OllamaError(
+            _fmt_api_error(
+                resp2.status_code if resp2 is not None else 0,
+                (resp2.text[:500] if resp2 is not None else str(e2)),
+                provider_name="OpenRouter",
+            )
+        ) from e2
+    _accumulate_task_usage(task, data)
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError) as e3:
+        raise OllamaError(f"Unexpected OpenRouter response format: {data}") from e3
+
+
+async def _fallback_to_openrouter_async(
+    *, prompt: str, timeout: float, task: object | None
+) -> str:
+    if not OPENROUTER_API_KEY:
+        raise OllamaError(
+            "LLM rate limited and OPENROUTER_API_KEY is not set for fallback (set it in .env)."
+        )
+    logger.warning(
+        "[llm] Primary provider rate limited — falling back to OpenRouter (%s)",
+        OPENROUTER_MODEL,
+    )
+    _abort_if_task_killed(task)
+    try:
+        data = await _call_provider_async(
+            prompt=prompt,
+            task=task,
+            timeout=timeout,
+            model=OPENROUTER_MODEL,
+            default_api_key=OPENROUTER_API_KEY,
+            default_url=OPENROUTER_URL,
+            default_base_url=OPENROUTER_BASE_URL,
+            provider_name="OpenRouter",
+        )
+    except httpx.HTTPStatusError as e2:
+        r2 = e2.response
+        raise OllamaError(
+            _fmt_api_error(
+                r2.status_code if r2 is not None else 0,
+                r2.text[:500] if r2 is not None else "",
+                provider_name="OpenRouter",
+            )
+        ) from e2
+    except httpx.RequestError as e2:
+        raise OllamaError(f"OpenRouter request failed after rate limit: {e2}") from e2
+    _accumulate_task_usage(task, data)
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError) as e3:
+        raise OllamaError(f"Unexpected OpenRouter response format: {data}") from e3
+
+
 def _resolve_provider_request(
     *,
     model: str,
@@ -229,6 +310,8 @@ def query_llm(
             resp = e.response
             status = resp.status_code if resp is not None else 0
             body = (resp.text[:500] if resp is not None else "") or ""
+            if _is_rate_limited(status, body) and not _is_openrouter_target(llm_override):
+                return _fallback_to_openrouter_sync(prompt=prompt, timeout=timeout, task=task)
             raise OllamaError(_fmt_api_error(status, body, provider_name="LLM provider")) from e
         except requests.RequestException as e:
             raise OllamaError(f"LLM provider request failed: {e}") from e
@@ -250,38 +333,7 @@ def query_llm(
         status = resp.status_code if resp is not None else 0
         body = (resp.text[:500] if resp is not None else "") or ""
         if _is_rate_limited(status, body):
-            if not OPENROUTER_API_KEY:
-                raise OllamaError(
-                    "Groq rate limited and OPENROUTER_API_KEY is not set for fallback (set it in .env)."
-                ) from e
-            logger.warning(
-                "[llm] Groq rate limit hit (429) — falling back to OpenRouter (%s)",
-                OPENROUTER_MODEL,
-            )
-            try:
-                data = _call_provider_sync(
-                    prompt=prompt,
-                    timeout=timeout,
-                    model=OPENROUTER_MODEL,
-                    default_api_key=OPENROUTER_API_KEY,
-                    default_url=OPENROUTER_URL,
-                    default_base_url=OPENROUTER_BASE_URL,
-                    provider_name="OpenRouter",
-                )
-            except RequestsHTTPError as e2:
-                resp2 = e2.response
-                raise OllamaError(
-                    _fmt_api_error(
-                        resp2.status_code if resp2 is not None else 0,
-                        (resp2.text[:500] if resp2 is not None else str(e2)),
-                        provider_name="OpenRouter",
-                    )
-                ) from e2
-            _accumulate_task_usage(task, data)
-            try:
-                return data["choices"][0]["message"]["content"]
-            except (KeyError, IndexError) as e3:
-                raise OllamaError(f"Unexpected OpenRouter response format: {data}") from e3
+            return _fallback_to_openrouter_sync(prompt=prompt, timeout=timeout, task=task)
         raise OllamaError(_fmt_api_error(status, body, provider_name="Groq")) from e
     except requests.RequestException as e:
         raise OllamaError(f"Groq request failed: {e}") from e
@@ -330,6 +382,8 @@ async def query_llm_async(
             resp = e.response
             status = resp.status_code if resp is not None else 0
             body = resp.text[:500] if resp is not None else ""
+            if _is_rate_limited(status, body) and not _is_openrouter_target(llm_override):
+                return await _fallback_to_openrouter_async(prompt=prompt, timeout=timeout, task=task)
             raise OllamaError(_fmt_api_error(status, body, provider_name="LLM provider")) from e
         except httpx.RequestError as e:
             raise OllamaError(f"LLM provider request failed: {e}") from e
@@ -352,42 +406,7 @@ async def query_llm_async(
         status = resp.status_code if resp is not None else 0
         body = resp.text[:500] if resp is not None else ""
         if _is_rate_limited(status, body):
-            if not OPENROUTER_API_KEY:
-                raise OllamaError(
-                    "Groq rate limited and OPENROUTER_API_KEY is not set for fallback (set it in .env)."
-                ) from e
-            logger.warning(
-                "[llm] Groq rate limit hit (429) — falling back to OpenRouter (%s)",
-                OPENROUTER_MODEL,
-            )
-            _abort_if_task_killed(task)
-            try:
-                data = await _call_provider_async(
-                    prompt=prompt,
-                    task=task,
-                    timeout=timeout,
-                    model=OPENROUTER_MODEL,
-                    default_api_key=OPENROUTER_API_KEY,
-                    default_url=OPENROUTER_URL,
-                    default_base_url=OPENROUTER_BASE_URL,
-                    provider_name="OpenRouter",
-                )
-            except httpx.HTTPStatusError as e2:
-                r2 = e2.response
-                raise OllamaError(
-                    _fmt_api_error(
-                        r2.status_code if r2 is not None else 0,
-                        r2.text[:500] if r2 is not None else "",
-                        provider_name="OpenRouter",
-                    )
-                ) from e2
-            except httpx.RequestError as e2:
-                raise OllamaError(f"OpenRouter request failed after Groq rate limit: {e2}") from e2
-            _accumulate_task_usage(task, data)
-            try:
-                return data["choices"][0]["message"]["content"]
-            except (KeyError, IndexError) as e3:
-                raise OllamaError(f"Unexpected OpenRouter response format: {data}") from e3
+            return await _fallback_to_openrouter_async(prompt=prompt, timeout=timeout, task=task)
         raise OllamaError(_fmt_api_error(status, body, provider_name="Groq")) from e
     except httpx.RequestError as e:
         raise OllamaError(f"Groq request failed: {e}") from e
