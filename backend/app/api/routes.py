@@ -2,14 +2,16 @@ import asyncio
 import json
 import logging
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.auth import require_api_key
 from app.config.settings import GROQ_MODEL, SANDBOX_IMAGE
 from app.database import load_all_tasks, load_task_transcript
+from app.logging.log_writer import LOGS_DIR
 from app.limiter import limiter
 from app.models.task import Task
 from app.orchestrator.orchestrator import Orchestrator
@@ -117,6 +119,18 @@ def get_task(task_id: str):
     if task_id not in tasks:
         return JSONResponse(status_code=404, content={"detail": "task not found"})
     return tasks[task_id]
+
+
+@router.get("/logs/last_run_azure", dependencies=[Depends(require_api_key)])
+def get_last_run_azure_log():
+    log_path = Path(LOGS_DIR) / "last_run_azure.log"
+    if not log_path.exists():
+        raise HTTPException(status_code=404, detail="last_run_azure.log not found")
+    try:
+        content = log_path.read_text(encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unable to read log: {e}") from e
+    return PlainTextResponse(content)
 
 
 @router.get("/tasks/{task_id}/transcript", dependencies=[Depends(require_api_key)])

@@ -153,7 +153,13 @@ GET  /tasks/{id}/stream  — SSE stream of live steps
 POST /tasks/{id}/approve — approve and commit
 POST /tasks/{id}/reject  — rollback changes
 POST /tasks/{id}/kill    — terminate running task
+GET  /logs/last_run_azure — latest run log text snapshot
 GET  /health             — health check
+```
+
+```powershell
+# Sync Azure latest run log to local logs/last_run_azure.log
+powershell -ExecutionPolicy Bypass -File .\scripts\sync_last_run_azure_log.ps1 -ApiKey "<your-server-api-key>"
 ```
 
 ---

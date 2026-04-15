@@ -29,8 +29,10 @@ env/
 workspaces/
 replays/
 logs/
+logs/**
 *.log
 logs/*.log
+logs/*.log.*
 *.stdout.log
 *.stderr.log
 orchestrator.db
