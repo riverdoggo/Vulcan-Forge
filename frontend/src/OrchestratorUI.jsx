@@ -438,10 +438,12 @@ export default function App() {
     fetchLogs(selectedId);
     if (selected?.status === "running") {
       const supportsSSE = typeof window !== "undefined" && "EventSource" in window;
-      if (supportsSSE) {
+      const serverApiKey = (settings.serverApiKey || "").trim();
+      const useSSE = supportsSSE && !serverApiKey;
+      // Do not place secrets in URL query params for EventSource.
+      // If auth key is set, use header-capable polling instead.
+      if (useSSE) {
         const streamUrl = new URL(`${API_BASE}/tasks/${selectedId}/stream`);
-        const serverApiKey = (settings.serverApiKey || "").trim();
-        if (serverApiKey) streamUrl.searchParams.set("api_key", serverApiKey);
         const es = new EventSource(streamUrl.toString());
         eventSourceRef.current = es;
 
@@ -1707,7 +1709,7 @@ export default function App() {
                       autoComplete="off"
                     />
                     <p className="settings-hint">
-                      Required for protected endpoints (`/tasks`, logs, approvals). Stored in browser local storage.
+                      Required for protected endpoints (`/tasks`, logs, approvals). Stored in browser local storage and never appended to URL query params.
                     </p>
                   </div>
 
