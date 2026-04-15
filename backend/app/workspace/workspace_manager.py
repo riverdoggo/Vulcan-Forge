@@ -110,13 +110,23 @@ def prepare_workspace(task: Task, workspace_path: Path) -> None:
         _copy_tree_into_workspace(local_path, workspace_path, skip_git=True)
     else:
         try:
-            if TEST_REPO_DIR.exists() and TEST_REPO_DIR.is_dir():
-                _copy_top_level_files_only(TEST_REPO_DIR, workspace_path)
-            else:
+            candidates = [
+                TEST_REPO_DIR,
+                Path("/workspaces/test_repo"),
+                PROJECT_ROOT / "workspaces" / "test_repo",
+            ]
+            selected: Path | None = next(
+                (p for p in candidates if p.exists() and p.is_dir()),
+                None,
+            )
+            if selected is None:
                 logger.warning(
-                    "test_repo directory not found at %s; workspace will start empty",
-                    TEST_REPO_DIR,
+                    "test_repo directory not found at any candidate path: %s; workspace will start empty",
+                    ", ".join(str(p) for p in candidates),
                 )
+            else:
+                _copy_tree_into_workspace(selected, workspace_path, skip_git=True)
+                logger.info("Seeded default workspace from %s", selected)
         except Exception as e:
             logger.warning("Failed to copy test_repo into workspace %s: %s", workspace_path, e)
 
