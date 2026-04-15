@@ -323,6 +323,41 @@ def _goal_likely_requires_test_bootstrap(goal: str) -> bool:
     return any(tok in g for tok in test_signals)
 
 
+def _goal_is_listing_only(goal: str | None) -> bool:
+    """
+    Detect requests that only ask to list directory/file contents.
+    These should not trigger tests or full bug-fix workflows.
+    """
+    g = (goal or "").strip().lower()
+    if not g:
+        return False
+    list_tokens = (
+        "list files",
+        "list file",
+        "list directories",
+        "list directory",
+        "show files",
+        "show directory",
+        "show dirs",
+        "ls",
+    )
+    action_tokens = (
+        "fix",
+        "bug",
+        "write",
+        "edit",
+        "change",
+        "create",
+        "add",
+        "delete",
+        "refactor",
+        "implement",
+        "run tests",
+        "test",
+    )
+    return any(tok in g for tok in list_tokens) and not any(tok in g for tok in action_tokens)
+
+
 def _task_no_tests_mode(task_id: str) -> bool:
     return bool(runtime_state(task_id).get("no_tests_mode", False))
 
@@ -616,6 +651,28 @@ class AgentLoop:
         executor = Executor()
         replay = ReplayStore()
         steps: list[dict[str, Any]] = []
+
+        if _goal_is_listing_only(task.goal):
+            decision = AgentDecision(
+                reasoning="Runtime: listing-only goal; enumerate workspace and finish",
+                tool="list_directory",
+                input="/workspace",
+                content=None,
+                done=False,
+            )
+            result = await asyncio.to_thread(executor.execute, decision, task, step=0)
+            _append_step_with_transcript(
+                task,
+                steps,
+                {"step": 0, "decision": decision.model_dump(), "result": result, "decision_retries": 0, "decision_attempts": 1},
+            )
+            replay.save(task.id, {"goal": task.goal, "steps": steps, "status": "completed"})
+            task.status = "completed"
+            task.escalation_reason = ""
+            save_task(task)
+            write_last_run_log(task, steps)
+            clear_runtime_state(task.id)
+            return "completed"
 
         def exit_if_killed() -> str | None:
             if getattr(task, "kill_requested", False):

@@ -1,4 +1,6 @@
 ## Lessons
+- [2026-04-15] For list-only user goals (list files/directories), skip test execution and complete after `list_directory` to avoid unnecessary loops.
+
 - [2026-04-14] If backend auth is enabled (`VULCAN_API_KEY` set), frontend calls to protected endpoints must include `X-API-Key`; health checks alone can still be green.
 
 - [2026-04-14] Keep auth/offline banners in the main content area (not fixed header overlays) to avoid blocking navigation and overlapping core UI.
