@@ -527,6 +527,7 @@ Rules:
 - Use write_file for all file edits unless you have a rare, specific reason not to: put the complete updated file in the content field (change only what is needed vs what you read).
 - apply_patch is a last resort (unified diff in content). Do not choose it when write_file would work.
 - For write_file you MUST provide the complete file content in the content field as a single JSON string: escape newlines as \\n and internal double-quotes as \\". Never wrap the whole answer in ``` markdown fences. Never use Python \"\"\" triple quotes — invalid JSON and the runtime will reject the step.
+- Use strict JSON syntax only: booleans are true/false, empty values are null. NEVER use Python None.
 - After EVERY write_file (or apply_patch if you used that fallback) you MUST immediately call run_tests next — the runtime enforces this after writes; still plan for it.
 - Never call write_file twice in a row on the same file
 - When run_tests passes, the runtime automatically runs git_diff and the reviewer — you do not call git_diff yourself
@@ -610,6 +611,7 @@ Rules:
 - Use write_file for all file edits unless you have a rare, specific reason not to: put the complete updated file in the content field (change only what is needed vs what you read).
 - apply_patch is a last resort (unified diff in content). Do not choose it when write_file would work.
 - For write_file you MUST provide the complete file content in the content field as a single JSON string: escape newlines as \\n and internal double-quotes as \\". Never wrap the whole answer in ``` markdown fences. Never use Python \"\"\" triple quotes — invalid JSON and the runtime will reject the step.
+- Use strict JSON syntax only: booleans are true/false, empty values are null. NEVER use Python None.
 - After EVERY write_file (or apply_patch if you used that fallback) you MUST immediately call run_tests next — the runtime enforces this after writes; still plan for it.
 - Never call write_file twice in a row on the same file
 - When run_tests passes, the runtime automatically runs git_diff and the reviewer — you do not call git_diff yourself

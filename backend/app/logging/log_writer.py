@@ -1,4 +1,5 @@
 import os
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Any
@@ -128,3 +129,9 @@ def write_last_run_log(task, steps: list) -> None:
                     "NOTE: This task reached the human gate because the automated reviewer "
                     "returned needs_changes three times and could not be satisfied within the review budget.\n"
                 )
+    # Keep a dedicated Azure latest-run log in sync.
+    azure_log_path = LOGS_DIR / "last_run_azure.log"
+    try:
+        shutil.copyfile(log_path, azure_log_path)
+    except Exception:
+        pass
