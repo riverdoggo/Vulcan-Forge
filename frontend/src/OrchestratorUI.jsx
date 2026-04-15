@@ -8,10 +8,6 @@ const API_BASE =
 
 const DEFAULT_SETTINGS = {
   serverApiKey: "",
-  providerName: "",
-  modelName: "",
-  apiKey: "",
-  baseUrl: "",
 };
 
 const authFetch = (url, options = {}) => {
@@ -229,7 +225,9 @@ export default function App() {
   const [settings, setSettings] = useState(() => {
     try {
       const stored = localStorage.getItem("vulcan_settings");
-      return stored ? { ...DEFAULT_SETTINGS, ...JSON.parse(stored) } : DEFAULT_SETTINGS;
+      if (!stored) return DEFAULT_SETTINGS;
+      const parsed = { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
+      return { serverApiKey: parsed.serverApiKey || "" };
     } catch {
       return DEFAULT_SETTINGS;
     }
@@ -252,6 +250,7 @@ export default function App() {
   const historyFetchLock = useRef(false);
   const [backendOnline, setBackendOnline] = useState(null);
   const [apiAuthRequired, setApiAuthRequired] = useState(false);
+  const [serverApiKeyDraft, setServerApiKeyDraft] = useState("");
 
   const saveSettings = useCallback((newSettings) => {
     const merged = { ...DEFAULT_SETTINGS, ...newSettings };
@@ -261,30 +260,18 @@ export default function App() {
 
   const resetSettings = useCallback(() => {
     setSettings(DEFAULT_SETTINGS);
+    setServerApiKeyDraft("");
     localStorage.removeItem("vulcan_settings");
   }, []);
 
   const providerReady = true;
-  const providerIndicatorLabel = (settings.apiKey || "").trim()
-    ? `${settings.providerName || "Custom"} · ${settings.modelName || "?"}`
-    : "Server-managed provider";
-  const settingsActiveLabel = (settings.apiKey || "").trim()
-    ? `${settings.providerName || "Custom"} · ${settings.modelName || "unknown model"}`
-    : "Server-managed provider";
+  const providerIndicatorLabel = "Server-managed provider";
+  const settingsActiveLabel = "Server-managed provider";
 
   const buildTaskHeaders = useCallback(() => {
     const headers = { "Content-Type": "application/json" };
     const serverApiKey = (settings.serverApiKey || "").trim();
     if (serverApiKey) headers["X-API-Key"] = serverApiKey;
-
-    const apiKey = (settings.apiKey || "").trim();
-    const modelName = (settings.modelName || "").trim();
-    const baseUrl = (settings.baseUrl || "").trim();
-    if (apiKey) {
-      headers["X-LLM-Key"] = apiKey;
-      if (modelName) headers["X-LLM-Model"] = modelName;
-      if (baseUrl) headers["X-LLM-Base-URL"] = baseUrl;
-    }
     return headers;
   }, [settings]);
 
@@ -364,20 +351,19 @@ export default function App() {
     return () => clearInterval(id);
   }, [apiAuthRequired, fetchTasks, settings.serverApiKey]);
 
-  const saveCustomApiConfig = useCallback(() => {
+  const saveServerApiKey = useCallback(() => {
+    const nextServerApiKey = (serverApiKeyDraft || "").trim();
     saveSettings({
       ...settings,
-      apiKey: (settings.apiKey || "").trim(),
-      baseUrl: (settings.baseUrl || "").trim(),
-      modelName: (settings.modelName || "").trim(),
-      providerName: (settings.providerName || "").trim(),
+      serverApiKey: nextServerApiKey,
     });
+    setServerApiKeyDraft("");
     setApiAuthRequired(false);
     setFormErr("");
     setBackendOnline(null);
     checkBackendHealth();
     fetchTasks();
-  }, [saveSettings, settings, checkBackendHealth, fetchTasks]);
+  }, [serverApiKeyDraft, saveSettings, settings, checkBackendHealth, fetchTasks]);
 
   const loadHistory = async () => {
     if (historyLoaded || historyFetchLock.current) return;
@@ -1697,17 +1683,29 @@ export default function App() {
                 <div className="settings-body">
                   <div className="settings-field">
                     <label className="settings-label">Server API key</label>
-                    <input
-                      className="settings-input settings-input-secret"
-                      type="password"
-                      placeholder="X-API-Key for protected endpoints"
-                      value={settings.serverApiKey}
-                      onChange={e => saveSettings({
-                        ...settings,
-                        serverApiKey: e.target.value,
-                      })}
-                      autoComplete="off"
-                    />
+                    <div className="settings-api-row">
+                      <input
+                        className="settings-input settings-input-secret"
+                        type="password"
+                        placeholder={(settings.serverApiKey || "").trim() ? "Saved (enter new key to replace)" : "X-API-Key for protected endpoints"}
+                        value={serverApiKeyDraft}
+                        onChange={e => setServerApiKeyDraft(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            saveServerApiKey();
+                          }
+                        }}
+                        autoComplete="off"
+                      />
+                      <button
+                        type="button"
+                        className="settings-api-save"
+                        onClick={saveServerApiKey}
+                      >
+                        Save key
+                      </button>
+                    </div>
                     <p className="settings-hint">
                       Required for protected endpoints (`/tasks`, logs, approvals). Stored in browser local storage and never appended to URL query params.
                     </p>
@@ -1715,127 +1713,8 @@ export default function App() {
 
                   <div className="settings-toggle-row">
                     <p className="settings-hint">
-                      Custom provider settings are optional. Leave blank to use the server-managed model/key.
+                      LLM provider/model/key are server-managed from Azure `.env`.
                     </p>
-                  </div>
-
-                  <div className="settings-fields">
-                      <div className="settings-field">
-                        <label className="settings-label">Provider name</label>
-                        <input
-                          className="settings-input"
-                          placeholder="e.g. Groq, OpenAI, DeepSeek"
-                          value={settings.providerName}
-                          onChange={e => saveSettings({
-                            ...settings,
-                            providerName: e.target.value,
-                          })}
-                        />
-                      </div>
-
-                      <div className="settings-field">
-                        <label className="settings-label">Model</label>
-                        <input
-                          className="settings-input"
-                          placeholder="e.g. llama-3.3-70b-versatile, gpt-4o, claude-opus-4-5"
-                          value={settings.modelName}
-                          onChange={e => saveSettings({
-                            ...settings,
-                            modelName: e.target.value,
-                          })}
-                        />
-                      </div>
-
-                      <div className="settings-field">
-                        <label className="settings-label">API Key</label>
-                        <div className="settings-api-row">
-                          <input
-                            className="settings-input settings-input-secret"
-                            type="password"
-                            placeholder="sk-..."
-                            value={settings.apiKey}
-                            onChange={e => saveSettings({
-                              ...settings,
-                              apiKey: e.target.value,
-                            })}
-                            onKeyDown={e => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                saveCustomApiConfig();
-                              }
-                            }}
-                            autoComplete="off"
-                          />
-                          <button
-                            type="button"
-                            className="settings-api-save"
-                            onClick={saveCustomApiConfig}
-                          >
-                            Save API
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="settings-field">
-                        <label className="settings-label">
-                          Base URL
-                          <span className="settings-optional"> (optional)</span>
-                        </label>
-                        <input
-                          className="settings-input"
-                          placeholder="https://api.groq.com/openai/v1"
-                          value={settings.baseUrl}
-                          onChange={e => saveSettings({
-                            ...settings,
-                            baseUrl: e.target.value,
-                          })}
-                        />
-                        <p className="settings-hint">
-                          Leave blank for Groq. Any OpenAI-compatible endpoint works.
-                        </p>
-                      </div>
-
-                      <div className="settings-field">
-                        <label className="settings-label">Quick fill</label>
-                        <div className="settings-quickfill">
-                          {[
-                            {
-                              name: "Groq",
-                              baseUrl: "https://api.groq.com/openai/v1",
-                              model: "llama-3.3-70b-versatile",
-                            },
-                            {
-                              name: "OpenRouter",
-                              baseUrl: "https://openrouter.ai/api/v1",
-                              model: "qwen/qwen3-coder:free",
-                            },
-                            {
-                              name: "OpenAI",
-                              baseUrl: "https://api.openai.com/v1",
-                              model: "gpt-4o",
-                            },
-                            {
-                              name: "DeepSeek",
-                              baseUrl: "https://api.deepseek.com/v1",
-                              model: "deepseek-chat",
-                            },
-                          ].map((provider) => (
-                            <button
-                              key={provider.name}
-                              type="button"
-                              className="settings-quickfill-btn"
-                              onClick={() => saveSettings({
-                                ...settings,
-                                providerName: provider.name,
-                                baseUrl: provider.baseUrl,
-                                modelName: provider.model,
-                              })}
-                            >
-                              {provider.name}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
                   </div>
 
                   <div className="settings-active">
@@ -1847,7 +1726,7 @@ export default function App() {
                   </div>
 
                   <button className="settings-clear" onClick={resetSettings}>
-                    Clear custom API override
+                    Clear local settings
                   </button>
                 </div>
               </div>
