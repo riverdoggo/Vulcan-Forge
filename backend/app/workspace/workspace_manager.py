@@ -67,6 +67,47 @@ def _copy_tree_into_workspace(src: Path, dst: Path, *, skip_git: bool) -> None:
             shutil.copy2(item, target)
 
 
+def _resolve_docker_mount_source(workspace_path: Path, safe_id: str) -> str:
+    """
+    Resolve the host path to mount into sandbox containers.
+
+    When backend runs in Docker and talks to the host daemon via /var/run/docker.sock,
+    a container-internal path like /workspaces/<id> is not valid as a bind source for
+    `docker run -v ...`. In that case, inspect this backend container's mounts and
+    translate WORKSPACE_ROOT destination to its host source path.
+    """
+    default_src = str(workspace_path.resolve())
+    workspace_root = str(WORKSPACE_ROOT or "").strip()
+    if not workspace_root.startswith("/"):
+        return default_src
+    if not Path("/.dockerenv").exists():
+        return default_src
+
+    container_id = (os.getenv("HOSTNAME") or "").strip()
+    if not container_id:
+        return default_src
+
+    try:
+        inspect = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                container_id,
+                "--format",
+                "{{range .Mounts}}{{if eq .Destination \"" + workspace_root + "\"}}{{.Source}}{{end}}{{end}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        host_root = (inspect.stdout or "").strip()
+        if inspect.returncode == 0 and host_root:
+            return str((Path(host_root) / safe_id).resolve())
+    except Exception:
+        pass
+    return default_src
+
+
 def prepare_workspace(task: Task, workspace_path: Path) -> None:
     if task.repo_type == "github":
         clone_dir = Path(tempfile.gettempdir()) / f"orch_clone_{task.id}"
@@ -225,7 +266,7 @@ class WorkspaceManager:
         workspace_path.mkdir(parents=True, exist_ok=True)
 
         container = _container_name(task_id)
-        abs_path = str(workspace_path.resolve())
+        abs_path = _resolve_docker_mount_source(workspace_path, safe_id)
         cmd = [
             "docker",
             "run",
