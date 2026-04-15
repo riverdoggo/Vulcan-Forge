@@ -300,6 +300,29 @@ def _contains_attribute_error(test_stdout: str) -> bool:
     return "AttributeError" in (test_stdout or "")
 
 
+def _goal_likely_requires_test_bootstrap(goal: str) -> bool:
+    """
+    Heuristic: run bootstrap tests for bug-fix / test-oriented goals,
+    skip for simple create/edit chores (e.g. "create hello.txt").
+    """
+    g = (goal or "").strip().lower()
+    if not g:
+        return True
+    test_signals = (
+        "fix",
+        "bug",
+        "failing",
+        "failure",
+        "regression",
+        "pytest",
+        "test",
+        "unittest",
+        "error",
+        "exception",
+    )
+    return any(tok in g for tok in test_signals)
+
+
 def _write_file_step_succeeded(step: dict[str, Any]) -> bool:
     """True only if write_file actually changed the file (not rejected / error)."""
     d = step.get("decision") or {}
@@ -619,15 +642,18 @@ class AgentLoop:
                         input="/workspace",
                         content=None,
                         done=False,
-                    ),
-                    AgentDecision(
-                        reasoning="Bootstrap: run test suite to see current failures",
-                        tool="run_tests",
-                        input=None,
-                        content=None,
-                        done=False,
-                    ),
+                    )
                 ]
+                if _goal_likely_requires_test_bootstrap(task.goal):
+                    bootstrap_actions.append(
+                        AgentDecision(
+                            reasoning="Bootstrap: run test suite to see current failures",
+                            tool="run_tests",
+                            input=None,
+                            content=None,
+                            done=False,
+                        )
+                    )
 
             stall: dict[str, Any] = {"reads": {}, "lists": 0}
             step = len(steps)
