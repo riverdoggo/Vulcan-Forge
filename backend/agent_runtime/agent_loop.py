@@ -673,10 +673,17 @@ class AgentLoop:
                 nonlocal step, last_test_failure_summary, review_prefix, broke_for_review
 
                 counts_after = rt_result.get("test_counts") if isinstance(rt_result, dict) else None
+                tests_green = (
+                    isinstance(rt_result, dict)
+                    and (
+                        rt_result.get("exit_code") == 0
+                        or str(rt_result.get("status") or "").strip().lower() == "no_tests_found"
+                    )
+                )
                 if hasattr(task, "last_test_counts") and counts_after:
                     task.last_test_counts = counts_after
 
-                if isinstance(rt_result, dict) and rt_result.get("exit_code") == 0:
+                if tests_green:
                     files_snapshot: dict[str, str] = {}
                     for p in getattr(task, "touched_files", []) or []:
                         r = read_file_tool(task.workspace["container"], p)
@@ -750,7 +757,7 @@ class AgentLoop:
                     step = rt_step + 2
                     return "__continue__"
 
-                if rt_result.get("exit_code") == 0:
+                if tests_green:
                     diff_decision = AgentDecision(
                         reasoning="Runtime: collect staged diff after tests passed",
                         tool="git_diff",
@@ -1295,7 +1302,10 @@ class AgentLoop:
                     fs = result.get("failure_summary")
                     if fs:
                         last_test_failure_summary = str(fs)
-                    elif int(result.get("exit_code", 0) or 0) != 0:
+                    elif (
+                        int(result.get("exit_code", 0) or 0) != 0
+                        and str(result.get("status") or "").strip().lower() != "no_tests_found"
+                    ):
                         last_test_failure_summary = (result.get("stdout") or "")[:8000]
                 step += 1
 
@@ -1342,7 +1352,10 @@ class AgentLoop:
                         fs2 = tr.get("failure_summary")
                         if fs2:
                             last_test_failure_summary = str(fs2)
-                        elif int(tr.get("exit_code", 0) or 0) != 0:
+                        elif (
+                            int(tr.get("exit_code", 0) or 0) != 0
+                            and str(tr.get("status") or "").strip().lower() != "no_tests_found"
+                        ):
                             last_test_failure_summary = (tr.get("stdout") or "")[:8000]
                     step += 1
 

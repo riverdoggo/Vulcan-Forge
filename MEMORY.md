@@ -1,4 +1,26 @@
 ## Lessons
+- [2026-04-14] If backend auth is enabled (`VULCAN_API_KEY` set), frontend calls to protected endpoints must include `X-API-Key`; health checks alone can still be green.
+
+- [2026-04-14] Keep auth/offline banners in the main content area (not fixed header overlays) to avoid blocking navigation and overlapping core UI.
+
+- [2026-04-14] Avoid ambiguous setting names (like "server default") when they control provider override behavior, not backend authentication.
+
+- [2026-04-14] Ensure callback dependency order in React components is safe; referencing `useCallback` dependencies before initialization can blank the app at runtime.
+
+- [2026-04-14] In Azure backend containers, install Docker CLI explicitly and verify `docker --version` inside the container before blaming workspace logic.
+
+- [2026-04-14] Seed and permission-check `workspaces/test_repo` on Azure when default repo tasks are expected to work without user-provided `repo_url`.
+
+- [2026-04-14] Prevent agent loops by forcing a context-shifting step after repeated failed writes on the same file path.
+
+- [2026-04-14] Full-file rewrite guards should be size-aware: allow complete rewrites for very small files, keep stricter thresholds for larger files.
+
+- [2026-04-14] Treat `run_tests` status `no_tests_found` as a valid completion path for simple file tasks to avoid pointless retry loops.
+
+- [2026-04-14] Exclude runtime workspace directories from pytest collection to prevent import-mismatch noise during local backend test runs.
+
+- [2026-04-14] Always verify the mathematical correctness of functions, especially when they are used in critical calculations.
+
 - [2026-04-14] Carefully review the logic of financial transactions to ensure accuracy and consistency.
 
 - [2026-04-14] Carefully review arithmetic operations and dictionary keys to prevent similar bugs in the future.
