@@ -21,6 +21,22 @@ _PYTEST_SUMMARY_RE = re.compile(
 )
 
 
+def _goal_is_bugfix_mode(goal: str | None) -> bool:
+    g = (goal or "").strip().lower()
+    if not g:
+        return False
+    bugfix_tokens = ("fix", "bug", "failing", "failure", "regression", "error", "exception")
+    return any(tok in g for tok in bugfix_tokens)
+
+
+def _goal_explicitly_allows_new_files(goal: str | None) -> bool:
+    g = (goal or "").strip().lower()
+    if not g:
+        return False
+    allow_tokens = ("create", "add ", "new file", "scaffold", "generate", "write a ")
+    return any(tok in g for tok in allow_tokens)
+
+
 def _parse_pytest_counts(output: str) -> dict[str, int | None]:
     counts: dict[str, int | None] = {"passed": None, "failed": None, "errors": None, "skipped": None}
     if not output:
@@ -200,6 +216,22 @@ class Executor:
                 path = _abs_workspace_path(decision.input)
                 if not path:
                     return ToolResult(status="error", stderr="write_file requires a path", exit_code=-1).to_dict()
+                path_exists = _stat_workspace_file(container, path) is not None
+                if (
+                    not path_exists
+                    and _goal_is_bugfix_mode(getattr(task, "goal", ""))
+                    and not _goal_explicitly_allows_new_files(getattr(task, "goal", ""))
+                ):
+                    return ToolResult(
+                        status="error",
+                        stderr="new_file_blocked_in_bugfix_mode",
+                        stdout=(
+                            "Write rejected: creating a brand-new file is blocked for this bug-fix task.\n"
+                            "Use existing project files (for example, files already present in /workspace) "
+                            "and apply minimal targeted fixes."
+                        ),
+                        exit_code=2,
+                    ).to_dict()
 
                 proposed = decision.content or ""
                 tid = str(getattr(task, "id", "") or "")
